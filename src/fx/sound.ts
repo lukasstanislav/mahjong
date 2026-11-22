@@ -37,9 +37,11 @@ interface Variation {
   lowpass: [number, number] // cutoff range in Hz: brightness ±
   level: [number, number]
 }
-const SHAPE: Record<Surface | 'pick', Variation> = {
+const CRUMBLE_GRAINS = 16
+const SHAPE: Record<Surface | 'pick' | 'crumb', Variation> = {
   felt: { slice: 0.12, rate: [0.84, 0.95], lowpass: [1800, 3400], level: [0.7, 0.95] }, // on cloth
   tile: { slice: 0.18, rate: [0.94, 1.08], lowpass: [5000, 12000], level: [0.7, 1] }, // on a tile
+  crumb: { slice: 0.035, rate: [1.6, 2.6], lowpass: [6000, 14000], level: [0.7, 1] }, // tiny grains
   pick: { slice: 0.14, rate: [0.97, 1.05], lowpass: [6000, 10000], level: [0.45, 0.55] },
 }
 
@@ -144,15 +146,29 @@ export function playClack(surface: Surface, gain = 1, pan = 0) {
   src.start()
 }
 
+/**
+ * Acrylic crumbling for a matched tile: a burst of tiny, high-pitched, very
+ * short grains of the clack samples, front-loaded (crack, then trickle).
+ */
+export function playCrumble(pan = 0) {
+  if (!ctx || !master || muted || !clackSamples.length) return
+  for (let i = 0; i < CRUMBLE_GRAINS; i++) {
+    const s = clackSamples[Math.floor(Math.random() * clackSamples.length)]
+    const delay = Math.pow(Math.random(), 2.2) * 0.42 // most grains early
+    const gain = (i === 0 ? 0.8 : rand(0.12, 0.35)) * (1 - delay)
+    playVaried(s, SHAPE.crumb, gain, pan + rand(-0.3, 0.3), i === 0 ? 0 : delay)
+  }
+}
+
 /** Short tap when a free tile is picked. */
 export function playPick(pan = 0) {
   if (!ctx || !master || muted || !pickSample) return
   playVaried(pickSample, SHAPE.pick, 1, pan)
 }
 
-function playVaried(s: Sample, v: Variation, gain: number, pan: number) {
+function playVaried(s: Sample, v: Variation, gain: number, pan: number, delay = 0) {
   const c = ctx!
-  const t = c.currentTime
+  const t = c.currentTime + delay
   const src = c.createBufferSource()
   src.buffer = s.buffer
   src.playbackRate.value = rand(v.rate[0], v.rate[1])

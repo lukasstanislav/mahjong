@@ -3,6 +3,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import type { Tile } from '../game/deal'
 import type { Surface } from '../fx/sound'
 import { SelectionFx, type SelectionTarget } from './SelectionFx'
+import { Debris } from './Debris'
 import { CELL_UV, FACE_ASPECT, IVORY, cellIndex, cellOffset, createAtlas } from './atlas'
 
 /**
@@ -39,7 +40,15 @@ const STAGGER = 0.028
 const DROP = 0.42
 const LAND_AT = 0.6
 const DROP_H = 4.5
-const LEAVE = 0.32
+const LEAVE = 0.45 // matched tile dissolve duration
+
+// Dissolve field, shared by the shader and the debris release timing:
+// f = FIELD_NOISE * noise + FIELD_HEIGHT * (1 - y/TH)  → the top crumbles first.
+// A fragment is discarded once progress (0 → OVERSHOOT over LEAVE) passes f.
+const FIELD_NOISE = 0.6
+const FIELD_HEIGHT = 0.4
+const OVERSHOOT = 1.1 // progress past 1 so every fragment is gone before the tile is hidden
+const dissolveField = (y01: number, n: number) => FIELD_NOISE * n + FIELD_HEIGHT * (1 - y01)
 
 // parallax
 const TILT_MAX = 0.17 // rad at full deflection (0.17 ≈ 10°)
@@ -109,6 +118,9 @@ export class BoardRenderer {
   private selTargetBuf: SelectionTarget = { pos: new THREE.Vector3(), spin: 0 }
   private aCell: THREE.InstancedBufferAttribute
   private aState: THREE.InstancedBufferAttribute
+  private aDissolve: THREE.InstancedBufferAttribute
+  private debris: Debris
+  private camLocal = new THREE.Vector3()
   private disposables: Array<{ dispose(): void }> = []
   private key!: THREE.SpotLight
   private palm: THREE.Texture | null = null
@@ -168,6 +180,8 @@ export class BoardRenderer {
 
     const backMat = new THREE.MeshStandardMaterial({ color: '#1b6a48', roughness: 0.35 })
     const bodyMat = new THREE.MeshStandardMaterial({ color: IVORY, roughness: 0.38 })
+    backMat.onBeforeCompile = injectDissolve
+    bodyMat.onBeforeCompile = injectDissolve
     const atlas = createAtlas(`${import.meta.env.BASE_URL}tiles.svg`)
     atlas.anisotropy = r.capabilities.getMaxAnisotropy()
     const faceMat = new THREE.MeshStandardMaterial({ map: atlas, roughness: 0.38 })
@@ -197,6 +211,13 @@ export class BoardRenderer {
     this.aState = new THREE.InstancedBufferAttribute(new Float32Array(maxTiles * 3), 3)
     face.setAttribute('aCell', this.aCell)
     face.setAttribute('aState', this.aState)
+    // per-instance dissolve progress, shared by all three tile parts
+    this.aDissolve = new THREE.InstancedBufferAttribute(new Float32Array(maxTiles), 1)
+    for (const g of [back, body, face]) g.setAttribute('aDissolve', this.aDissolve)
+
+    this.debris = new Debris({ w: TW, d: TD, h: TH, backFrac: 0.28 }) // fewer green crumbs than the true back thickness: reads better
+    this.table.add(this.debris.mesh)
+    this.disposables.push(this.debris)
 
     this.disposables.push(back, body, face, pick, backMat, bodyMat, faceMat, atlas, this.pickMesh.material as THREE.Material)
 
@@ -240,6 +261,9 @@ export class BoardRenderer {
       })
     }
     this.aCell.needsUpdate = true
+    ;(this.aDissolve.array as Float32Array).fill(0)
+    this.aDissolve.needsUpdate = true
+    this.debris.clear()
     for (const m of this.meshes) m.count = tiles.length
     this.introEnd = animate ? now + 0.05 + order.length * STAGGER + DROP : 0
     this.fitCamera()
@@ -258,6 +282,8 @@ export class BoardRenderer {
         if (this.reducedMotion) this.hide(r)
         else {
           r.leaveStart = now
+          this.updateCamLocal()
+          this.debris.spawn(r.base, r.spin, now, LEAVE / OVERSHOOT, this.camLocal, dissolveField)
           const p = this.screenOf(r, TH)
           this.cb.onLeave?.(p.x, p.y)
         }
@@ -443,6 +469,7 @@ export class BoardRenderer {
 
   private patchFaceMaterial(mat: THREE.MeshStandardMaterial) {
     mat.onBeforeCompile = (shader) => {
+      injectDissolve(shader)
       shader.uniforms.uCellSize = { value: new THREE.Vector2(CELL_UV.u, CELL_UV.v) }
       shader.vertexShader = shader.vertexShader
         .replace(
@@ -486,9 +513,11 @@ export class BoardRenderer {
 
     const animating = this.updateMatrices(now)
     const selFxActive = this.selFx.update(dt, now, this.selTarget)
+    this.updateCamLocal()
+    const debrisActive = this.debris.update(dt, now, this.camLocal)
     const swaying = this.palm !== null && !this.reducedMotion
     if (swaying) this.swayPalm(now)
-    if (this.dirty || animating || tilting || swaying || selFxActive) {
+    if (this.dirty || animating || tilting || swaying || selFxActive || debrisActive) {
       this.dirty = false
       this.renderer.render(this.scene, this.camera)
     }
@@ -542,13 +571,15 @@ export class BoardRenderer {
         if (t >= 1) {
           r.leaveStart = NaN
           this.hide(r)
+          this.aDissolve.setX(id, 0)
+          this.aDissolve.needsUpdate = true
           animating = true // one more frame to show the removal
           continue
         }
         animating = true
-        const e = 1 - (1 - t) * (1 - t)
-        y += 0.9 * e
-        s = 1 - 0.85 * t * t
+        this.aDissolve.setX(id, t * OVERSHOOT)
+        this.aDissolve.needsUpdate = true
+        y += 0.04 * t // the crumbling tile lifts a hair as it breaks
       } else if (id === sel && r.present && !this.reducedMotion) {
         y += 0.1 + 0.03 * Math.sin(now * 5.5) // lifted + gentle bob
         animating = true
@@ -567,6 +598,12 @@ export class BoardRenderer {
     }
     for (const m of this.meshes) m.instanceMatrix.needsUpdate = true
     return animating
+  }
+
+  /** Camera position in table-local space (the table tilts/pans). */
+  private updateCamLocal() {
+    this.table.updateMatrixWorld()
+    this.table.worldToLocal(this.camLocal.copy(this.camera.position))
   }
 
   private hide(r: TileRt) {
@@ -684,4 +721,46 @@ export class BoardRenderer {
     const b = this.table.localToWorld(r.base.clone().setX(r.base.x + TW / 2)).project(this.camera)
     return (Math.abs(b.x - a.x) / 2) * this.width
   }
+}
+
+/**
+ * Dissolve for the tile materials (onBeforeCompile). Per-instance progress
+ * `aDissolve` (0 = intact). A fragment is discarded where the dissolve field
+ * f = FIELD_NOISE·noise(local pos) + FIELD_HEIGHT·(1 − y/TH) is below the
+ * progress; a thin band just above the threshold glows (emissive), so the
+ * eaten edge looks hot. Local (pre-instance) position keeps the pattern
+ * fixed to the tile. Note: the shadow depth pass doesn't discard, so a
+ * dissolving tile keeps its full shadow for LEAVE seconds.
+ */
+function injectDissolve(shader: THREE.WebGLProgramParametersWithUniforms) {
+  shader.uniforms.uDissolveGlow = { value: new THREE.Color(1.0, 0.7, 0.32).multiplyScalar(4) }
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute float aDissolve;\nvarying float vDissolve;\nvarying vec3 vLocal;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLocal = position;\nvDissolve = aDissolve;')
+  shader.fragmentShader = shader.fragmentShader
+    .replace(
+      '#include <common>',
+      `#include <common>
+uniform vec3 uDissolveGlow;
+varying float vDissolve;
+varying vec3 vLocal;
+float dEdge = 0.0;
+float dHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float dNoise(vec3 x) {
+  vec3 i = floor(x); vec3 f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(dHash(i), dHash(i + vec3(1, 0, 0)), f.x), mix(dHash(i + vec3(0, 1, 0)), dHash(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(dHash(i + vec3(0, 0, 1)), dHash(i + vec3(1, 0, 1)), f.x), mix(dHash(i + vec3(0, 1, 1)), dHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}`,
+    )
+    .replace(
+      '#include <clipping_planes_fragment>',
+      `#include <clipping_planes_fragment>
+if (vDissolve > 0.0) {
+  float n = 0.65 * dNoise(vLocal * 7.0) + 0.35 * dNoise(vLocal * 17.0);
+  float f = ${FIELD_NOISE.toFixed(3)} * n + ${FIELD_HEIGHT.toFixed(3)} * (1.0 - clamp(vLocal.y / ${TH.toFixed(4)}, 0.0, 1.0));
+  if (f < vDissolve) discard;
+  dEdge = 1.0 - smoothstep(vDissolve, vDissolve + 0.07, f);
+}`,
+    )
+    .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += uDissolveGlow * dEdge;')
 }

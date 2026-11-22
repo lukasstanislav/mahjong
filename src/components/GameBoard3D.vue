@@ -7,7 +7,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Tile } from '../game/deal'
 import { ParticleLayer } from '../fx/particles'
-import { playChime, playClack, playHonk, playPick } from '../fx/sound'
+import { playChime, playClack, playCrumble, playHonk, playPick } from '../fx/sound'
 import { BoardRenderer } from '../three/BoardRenderer'
 
 const props = defineProps<{
@@ -47,8 +47,9 @@ onMounted(() => {
         playClack(surface, surface === 'felt' ? 0.9 : 0.7, panAt(x))
         if (!reducedMotion) particles?.dust(x, y, w)
       },
-      onLeave: (x, y) => {
-        if (!reducedMotion) particles?.sparkle(x, y)
+      // matched tile: the renderer dissolves it into 3D crumbs; we add the sound
+      onLeave: (x) => {
+        playCrumble(panAt(x))
         const now = performance.now()
         if (now - lastChime > 80) playChime()
         lastChime = now
