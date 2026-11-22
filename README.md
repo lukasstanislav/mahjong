@@ -100,4 +100,6 @@ Built with [Vue](https://vuejs.org/), [Vite](https://vite.dev/) and [three.js](h
 
 ## Licence
 
-_TODO: choose a licence (e.g. MIT) and add a `LICENSE` file._ Without one, this code is not open source in the legal sense.
+The code is released under the [MIT License](LICENSE).
+
+The licence covers the source code. Third-party assets listed under [Credits](#credits) keep their own licences.
