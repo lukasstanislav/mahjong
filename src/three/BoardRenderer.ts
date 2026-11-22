@@ -47,6 +47,16 @@ const CAM_ORBIT = 0.35 // world units of camera shift at full tilt
 const PAN = 0.45 // world units the table slides AWAY from the cursor at full deflection
 const CAM_ELEVATION = THREE.MathUtils.degToRad(70)
 const VIEW_SHIFT_Y = 0.05 // move the whole image up by this fraction of viewport height (negative = down)
+// "Show pickable": blocked tiles are darkened by this fraction (face shader + body instance colour)
+const DIM = 0.8
+const WHITE = new THREE.Color(1, 1, 1)
+const DIMMED = new THREE.Color(1 - DIM, 1 - DIM, 1 - DIM)
+
+// lighting
+const SUN_INTENSITY = 5.2 // key spotlight ("sun"); was 3.4
+const SUN_COLOR = '#ffecc8' // warm sunlight
+const AMBIENT = 0.45 // hemisphere fill: how light the shade stays
+
 // palm-shadow light cookie (SpotLight.map) — see setupPalm()
 const PALM_URL = 'palm-cookie.jpg'
 const PALM_SHADOW = 0.5 // key-light multiplier inside the leaf shadows (0 = black, 1 = no shadow)
@@ -92,6 +102,7 @@ export class BoardRenderer {
   private meshes: THREE.InstancedMesh[] = []
   private pickMesh: THREE.InstancedMesh
   private faceMesh: THREE.InstancedMesh
+  private bodyMeshes: THREE.InstancedMesh[] = []
   private aCell: THREE.InstancedBufferAttribute
   private aState: THREE.InstancedBufferAttribute
   private disposables: Array<{ dispose(): void }> = []
@@ -168,7 +179,10 @@ export class BoardRenderer {
       this.table.add(im)
       return im
     }
-    this.meshes.push(mk(back, backMat, true), mk(body, bodyMat, true))
+    this.bodyMeshes = [mk(back, backMat, true), mk(body, bodyMat, true)]
+    this.meshes.push(...this.bodyMeshes)
+    // per-instance tint for the body (used to dim blocked tiles); start all white
+    for (const m of this.bodyMeshes) for (let i = 0; i < maxTiles; i++) m.setColorAt(i, WHITE)
     this.faceMesh = mk(face, faceMat, false)
     this.meshes.push(this.faceMesh)
     this.pickMesh = mk(pick, new THREE.MeshBasicMaterial(), false)
@@ -296,9 +310,9 @@ export class BoardRenderer {
   // ---- scene setup -----------------------------------------------------------
 
   private buildLights() {
-    this.scene.add(new THREE.HemisphereLight('#fff4dc', '#0b2a18', 0.45))
+    this.scene.add(new THREE.HemisphereLight('#fff4dc', '#0b2a18', AMBIENT))
     // Key: a soft-edged lamp above the table. The penumbra falloff is the vignette.
-    const key = new THREE.SpotLight('#fff1d6', 3.4, 0, 0.62, 0.85, 0)
+    const key = new THREE.SpotLight(SUN_COLOR, SUN_INTENSITY, 0, 0.62, 0.85, 0)
     key.position.set(-4, 19, 9)
     key.target.position.set(0, 0, 0.5)
     key.castShadow = true
@@ -437,7 +451,7 @@ export class BoardRenderer {
             // selected: warm gold tint; hover: brighten; dim: darken
             'diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.0, 0.82, 0.38), vState.x * 0.9);\n' + 'diffuseColor.rgb += vec3(0.10, 0.07, 0.0) * vState.x;',
             'diffuseColor.rgb *= 1.0 + vState.y * 0.14;',
-            'diffuseColor.rgb *= 1.0 - vState.z * 0.38;',
+            `diffuseColor.rgb *= 1.0 - vState.z * ${DIM.toFixed(3)};`,
           ].join('\n'),
         )
     }
@@ -552,14 +566,13 @@ export class BoardRenderer {
     const { freeIds, selectedId, showFree } = this.state
     for (const r of this.rt) {
       const id = r.tile.id
-      this.aState.setXYZ(
-        id,
-        id === selectedId ? 1 : 0,
-        id === this.hovered && freeIds.has(id) ? 1 : 0,
-        showFree && !freeIds.has(id) ? 1 : 0,
-      )
+      const dim = showFree && !freeIds.has(id)
+      this.aState.setXYZ(id, id === selectedId ? 1 : 0, id === this.hovered && freeIds.has(id) ? 1 : 0, dim ? 1 : 0)
+      // dim the body halves by the same factor as the face, so the whole tile darkens
+      for (const m of this.bodyMeshes) m.setColorAt(id, dim ? DIMMED : WHITE)
     }
     this.aState.needsUpdate = true
+    for (const m of this.bodyMeshes) m.instanceColor!.needsUpdate = true
   }
 
   private setHovered(id: number | null) {

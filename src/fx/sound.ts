@@ -28,7 +28,7 @@ const VARIANTS = 6
 const CLACK_SECONDS = 0.22
 
 const CLACK_FILES = ['sounds/clack-1.mp3', 'sounds/clack-2.mp3']
-const PICK_FILE = 'single-mahjong-tile-tap.mp3'
+const PICK_FILE = 'sounds/tap.mp3'
 const SAMPLE_LEVEL = 0.6 // after peak normalisation
 
 interface Variation {

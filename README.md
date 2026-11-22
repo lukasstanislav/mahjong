@@ -63,7 +63,7 @@ src/
   components/   Vue components: name form, 3D board shell, CSS fallback board
 public/
   tiles.svg           Tile face sprite
-  sounds/             Landing clack samples
+  sounds/             Landing clacks and the pick tap
   palm-cookie.jpg     Palm shadow texture (1024² crop of palm_shadows.jpg)
 ```
 
@@ -87,14 +87,11 @@ Keep game rules in `src/game/` with tests. Rendering code should only consume th
 
 ## Credits
 
-> **TODO (maintainer):** fill in the source and licence for each asset before publishing.
-
 | Asset | Source | Licence |
 |---|---|---|
-| `public/tiles.svg` (tile faces) | _TODO_ | _TODO_ |
-| `public/sounds/clack-1.mp3`, `clack-2.mp3` | AI-generated (_TODO: tool_) | _TODO: check the tool's terms_ |
-| `public/single-mahjong-tile-tap.mp3` | _TODO_ | _TODO_ |
-| `public/palm_shadows.jpg` / `palm-cookie.jpg` | _TODO_ | _TODO_ |
+| `public/tiles.svg` (tile faces, unmodified) | [WarL0ckNet/tile-art](https://github.com/WarL0ckNet/tile-art) (`img/tiles.svg`, commit `8b8f2f9`). Vectorised from Martin Persson's raster tiles (martinpersson.org) per the upstream README | GPL-3.0, see [`licenses/tiles-svg-GPL-3.0.txt`](licenses/tiles-svg-GPL-3.0.txt) |
+| `public/sounds/clack-1.mp3`, `clack-2.mp3`, `tap.mp3` | Generated with [Sonilo](https://sonilo.com) | Sonilo terms; attribution required: **"Sound effects by Sonilo (sonilo.com)"** (shown in the game's start screen) |
+| `public/palm_shadows.jpg`, `palm-cookie.jpg` (cropped, resized) | Photo by [Augustine Wong](https://unsplash.com/@augustinewong) on [Unsplash](https://unsplash.com/photos/shadow-of-palm-fronds-cast-on-light-wall-T0BYurbDK_M) | [Unsplash License](https://unsplash.com/license) (attribution not required, given anyway) |
 
 Built with [Vue](https://vuejs.org/), [Vite](https://vite.dev/) and [three.js](https://threejs.org/).
 

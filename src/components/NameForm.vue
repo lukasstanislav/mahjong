@@ -30,6 +30,10 @@ function onSubmit() {
     />
     <p class="error" :class="{ visible: touched && error }">{{ error ?? ' ' }}</p>
     <button type="submit">Play</button>
+    <p class="credits">
+      Sound effects by Sonilo (<a href="https://sonilo.com" target="_blank" rel="noopener">sonilo.com</a>) ·
+      Tiles from <a href="https://github.com/WarL0ckNet/tile-art" target="_blank" rel="noopener">WarL0ckNet/tile-art</a> (GPL-3.0)
+    </p>
   </form>
 </template>
 
@@ -69,4 +73,6 @@ button {
   cursor: pointer;
 }
 button:hover { background: #f2d272; }
+.credits { margin: 10px 0 0; font-size: 11px; opacity: 0.6; text-align: center; line-height: 1.5; }
+.credits a { color: inherit; }
 </style>
