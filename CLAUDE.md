@@ -1,0 +1,66 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+Open-source pet project: a single-player Mahjong solitaire (match-two-tiles) game in Vue 3 + TypeScript + Vite. No backend, no accounts. The player types a name (1–15 chars) and a game starts immediately on the classic 144-tile "turtle" layout, rendered in a tilted pseudo-3D style on a green cloth table.
+
+## Commands
+
+```bash
+npm install
+npm run dev            # Vite dev server
+npm run build          # vue-tsc type-check + production build to dist/
+npm run typecheck      # vue-tsc only
+npm test               # vitest run (all *.spec.ts under src/)
+npx vitest run src/game/game.spec.ts          # single file
+npx vitest run -t "dealSolvable"              # single test by name
+```
+
+There is no linter configured yet.
+
+## Game rules (source of truth for behaviour)
+
+- Layout positions are fixed. Only the faces are randomly distributed, and each deal is **guaranteed solvable** (see below).
+- A tile is **pickable** only if no tile lies on top of it and at least one of its long sides (left or right) is open.
+- First pick highlights a tile. If the second pick matches, both tiles are removed. If it doesn't match, it becomes the new first pick. Clicking the selected tile again deselects it.
+- Identical faces match. Exceptions: any flower matches any flower, and any season matches any season (`matchKey` in `src/game/tiles.ts`).
+
+## Architecture
+
+`src/game/` holds the pure logic, with no DOM access. It is unit-tested and is where rule changes belong:
+
+- `layout.ts`: positions use **half-tile units** (a tile covers 2×2 cells, `z` = layer). This is how half-offset tiles (end caps, apex) are expressed without fractions. `isFree`, `covers` and `touchesSide` define pickability, and everything else depends on them.
+- `tiles.ts`: the 144-tile set as 72 matching pairs.
+- `deal.ts`: `dealSolvable` simulates a game in reverse: it repeatedly picks two currently-free positions from the remaining layout, assigns them a pair, and removes them. The recorded removal order is a valid solution. It retries if the simulation strands itself. Don't replace this with a plain shuffle, which often produces dead boards.
+- `useGame.ts`: the Vue composable that owns game state (`tiles`, `selectedId`, derived `freeIds`, `availablePairs`, `won`, `stuck`) and the `pick` rule.
+- `playerName.ts`: name normalisation and validation (Unicode letters and marks, digits, space, `_`, `-`; max 15 code points).
+
+### Rendering
+
+There are two boards with the same props and events (`tiles`, `dealId`, `freeIds`, `selectedId`, `showFree` → `pick`). `App.vue` uses the WebGL board when WebGL2 is available, otherwise the DOM board. The WebGL board is loaded lazily as its own chunk; three.js is about 140 kB gzipped.
+
+**WebGL board** (primary): `src/components/GameBoard3D.vue` is a thin Vue shell around `src/three/BoardRenderer.ts`, which is imperative three.js with no Vue inside.
+- World: the table is in the XZ plane, +Y up, and the camera looks down at about 55° from +Z. Layout half-tile units map to X/Z, and layer `z` maps to `Y = z * TH`, so tiles physically rest on each other. **Tile ids are layout indices and are used directly as instance ids.**
+- Each tile is 3 `InstancedMesh`es sharing one instance matrix, with offsets baked into the geometry: a green back half (`RoundedBoxGeometry`), an ivory top half, and a face quad. A fourth, invisible box `InstancedMesh` is the raycast target (`Raycaster` ignores `.visible`), which keeps hover picking cheap.
+- Faces: `src/three/atlas.ts` rasterises `public/tiles.svg` symbols into a canvas atlas at runtime, plus flowers and seasons as text. Cells are filled with `IVORY`, the same colour as the body material, so the quad is seamless. Each cell gets its own copy of the sprite text, so per-tile recolouring is a string replacement on that copy. Bamboo (`s1–s9`) swaps `fill: #000000` for `BAMBOO_GREEN`; the file on disk stays unmodified. `MeshStandardMaterial.onBeforeCompile` injects the per-instance attributes `aCell` (atlas offset) and `aState` (selected, hover, dim tint). If you change three.js versions, check that the `#include <uv_vertex>` and `#include <map_fragment>` chunk names still exist.
+- Animation is CPU-side. While anything moves, `updateMatrices` recomposes every instance matrix each frame. Removed tiles are collapsed to a zero matrix. The renderer only draws when something changed (`dirty`, an animation, or the tilt is still easing).
+- The intro drop is scripted, not physics. `onLand` fires from the frame loop when a tile crosses `LAND_AT` of `DROP`, and the Vue shell plays the clack and dust. A click during the intro skips it. Removal (`sync` sees a tile disappear) fires `onLeave`, which triggers sparkles and the chime.
+- **Parallax:** the pointer position (NDC) is exponentially smoothed. The table group rotates by up to `TILT_MAX` (about 4°) so that the side under the cursor rises toward the camera, plus a small camera orbit. It's off under `prefers-reduced-motion`.
+- **Camera fit:** the distance comes from the projected extents of the board's bounding box, and the image is centred with a lens shift (`setViewOffset`). `Raycaster` and `project()` already account for the shift.
+- Lighting: a soft-edged `SpotLight` key, whose penumbra makes the vignette, casts the shadows (PCF). There's also a hemisphere light and a weak fill. The cloth is `MeshPhysicalMaterial` with `sheen` (fabric BRDF) plus a noise map.
+- **Palm shadow** is a light cookie: `SpotLight.map` multiplies the key light by `public/palm-cookie.jpg`, projected through the spotlight's shadow camera, so it falls correctly in 3D on the cloth and on the tiles' tops and sides. three only applies light maps when `castShadow` is on. The texture is processed at load (`setupPalm`): it's downscaled to `PALM_RES` (which blurs out the source's wall grain), then levels map luminance to a light multiplier (`PALM_LEVELS` → `PALM_SHADOW..1`). **Sway** (`swayPalm`) rolls the shadow camera's `up` vector about the light axis and shifts its `setViewOffset`. That moves the pattern without moving the light, so the tiles' own shadows stay still. Because of the sway, the scene renders every frame; it's off under reduced motion. `palm-cookie.jpg` is a 1024² crop of the original photo `palm_shadows.jpg`.
+- Particles stay a 2D canvas overlay (`src/fx/particles.ts`), fed with projected screen coordinates.
+- In dev builds only, `window.__mahjong = { board, props }` is exposed for automated browser checks.
+
+**DOM board** (fallback): `GameBoard.vue` uses positioned `<div>`s, with thickness made from stacked `box-shadow`s (`--depth`), and `TileFace.vue` uses SVG `<use>` into `public/tiles.svg`. That sprite is a riichi set kept **unmodified**; every symbol begins with an unfilled `#tile` rect, so references must pass `fill="transparent"`. Draw order there comes from `z-index` (`z*10000 + (x+y)*100 + x`). Every keyframe and transition on `.tile` must keep `rotate(var(--rz))`.
+
+**Sound** (`src/fx/sound.ts`): landing clacks are the one-shots in `public/sounds/` (`CLACK_FILES`). Each landing picks one at random and varies its pitch (playback rate), brightness (low-pass cutoff), level, start (tiny jitter) and stereo pan (the tile's screen x). The ranges per surface are in `SHAPE` (`'felt'` for layer 0, `'tile'` for upper layers). Only the first `slice` seconds play, because intro landings come every 28 ms. On load, every file is trimmed of leading silence (onset detection) so the hit lines up with the visual landing, and peak-normalised so the random choice doesn't jump in volume. Adding a take means adding its path to `CLACK_FILES`. The older `public/single-mahjong-tile-tap.mp3` is the **pick** sound (`playPick`, when a free tile is selected). If no clack file loads, a synthesised clack is used instead. The match chime and the blocked-tile honk are synthesised. `unlockAudio()` must be called inside a user gesture (`App.vue`'s `deal()` does this). The mute preference is stored in `localStorage`.
+
+`App.vue` switches between the name form and the game. The last used name is remembered in `localStorage` (all access in try/catch).
+
+## Constraints
+
+- The player name is untrusted input. Only render it via text interpolation, never `v-html`.
+- Keep game logic out of components so it stays testable in the `node` Vitest environment (no jsdom configured).
