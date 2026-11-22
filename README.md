@@ -4,6 +4,8 @@ A relaxed Mahjong solitaire for the browser, with 3D tiles on a green cloth tabl
 
 No account and no backend. Type a name and the tiles drop onto the table.
 
+**▶ Play it: https://lukasstanislav.github.io/mahjong/**
+
 ![Gameplay: 144 tiles in the classic pyramid layout on green cloth with soft palm shadows](docs/screenshot.jpg)
 
 ## How to play
@@ -51,7 +53,7 @@ npx vitest run src/game/game.spec.ts
 npx vitest run -t "dealSolvable"
 ```
 
-The production build is static files in `dist/`, so any static host works. three.js is split into its own chunk and loads while the player types their name.
+The production build is static files in `dist/`, so any static host works. Every push to `main` is deployed to GitHub Pages by `.github/workflows/deploy.yml`, which runs the tests, then builds with `BASE_PATH=/<repo>/`. three.js is split into its own chunk and loads while the player types their name.
 
 ## Project structure
 
@@ -64,7 +66,7 @@ src/
 public/
   tiles.svg           Tile face sprite
   sounds/             Landing clacks and the pick tap
-  palm-cookie.jpg     Palm shadow texture (1024² crop of palm_shadows.jpg)
+  palm-cookie.jpg     Palm shadow texture (1024² crop of assets-src/palm_shadows.jpg)
 ```
 
 Some implementation notes:
@@ -91,7 +93,7 @@ Keep game rules in `src/game/` with tests. Rendering code should only consume th
 |---|---|---|
 | `public/tiles.svg` (tile faces, unmodified) | [WarL0ckNet/tile-art](https://github.com/WarL0ckNet/tile-art) (`img/tiles.svg`, commit `8b8f2f9`). Vectorised from Martin Persson's raster tiles (martinpersson.org) per the upstream README | GPL-3.0, see [`licenses/tiles-svg-GPL-3.0.txt`](licenses/tiles-svg-GPL-3.0.txt) |
 | `public/sounds/clack-1.mp3`, `clack-2.mp3`, `tap.mp3` | Generated with [Sonilo](https://sonilo.com) | Sonilo terms; attribution required: **"Sound effects by Sonilo (sonilo.com)"** (shown in the game's start screen) |
-| `public/palm_shadows.jpg`, `palm-cookie.jpg` (cropped, resized) | Photo by [Augustine Wong](https://unsplash.com/@augustinewong) on [Unsplash](https://unsplash.com/photos/shadow-of-palm-fronds-cast-on-light-wall-T0BYurbDK_M) | [Unsplash License](https://unsplash.com/license) (attribution not required, given anyway) |
+| `assets-src/palm_shadows.jpg` (original), `public/palm-cookie.jpg` (cropped, resized) | Photo by [Augustine Wong](https://unsplash.com/@augustinewong) on [Unsplash](https://unsplash.com/photos/shadow-of-palm-fronds-cast-on-light-wall-T0BYurbDK_M) | [Unsplash License](https://unsplash.com/license) (attribution not required, given anyway) |
 
 Built with [Vue](https://vuejs.org/), [Vite](https://vite.dev/) and [three.js](https://threejs.org/).
 
