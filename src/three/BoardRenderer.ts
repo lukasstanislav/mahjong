@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import type { Tile } from '../game/deal'
 import type { Surface } from '../fx/sound'
+import { SelectionFx, type SelectionTarget } from './SelectionFx'
 import { CELL_UV, FACE_ASPECT, IVORY, cellIndex, cellOffset, createAtlas } from './atlas'
 
 /**
@@ -103,6 +104,9 @@ export class BoardRenderer {
   private pickMesh: THREE.InstancedMesh
   private faceMesh: THREE.InstancedMesh
   private bodyMeshes: THREE.InstancedMesh[] = []
+  private selFx: SelectionFx
+  private selTarget: SelectionTarget | null = null
+  private selTargetBuf: SelectionTarget = { pos: new THREE.Vector3(), spin: 0 }
   private aCell: THREE.InstancedBufferAttribute
   private aState: THREE.InstancedBufferAttribute
   private disposables: Array<{ dispose(): void }> = []
@@ -195,6 +199,10 @@ export class BoardRenderer {
     face.setAttribute('aState', this.aState)
 
     this.disposables.push(back, body, face, pick, backMat, bodyMat, faceMat, atlas, this.pickMesh.material as THREE.Material)
+
+    this.selFx = new SelectionFx({ w: TW, d: TD, h: TH, radius: RADIUS }, reducedMotion)
+    this.table.add(this.selFx.group)
+    this.disposables.push(this.selFx)
 
     this.timer.connect(document) // pause-aware (Page Visibility API)
     r.setAnimationLoop(this.frame)
@@ -477,9 +485,10 @@ export class BoardRenderer {
     }
 
     const animating = this.updateMatrices(now)
+    const selFxActive = this.selFx.update(dt, now, this.selTarget)
     const swaying = this.palm !== null && !this.reducedMotion
     if (swaying) this.swayPalm(now)
-    if (this.dirty || animating || tilting || swaying) {
+    if (this.dirty || animating || tilting || swaying || selFxActive) {
       this.dirty = false
       this.renderer.render(this.scene, this.camera)
     }
@@ -489,6 +498,7 @@ export class BoardRenderer {
   private updateMatrices(now: number): boolean {
     let animating = false
     const sel = this.state.selectedId
+    this.selTarget = null
     for (const r of this.rt) {
       const id = r.tile.id
       if (r.hidden) continue
@@ -547,6 +557,11 @@ export class BoardRenderer {
       this.tmpE.set(rx, r.spin, rz)
       this.tmpQ.setFromEuler(this.tmpE)
       this.tmpV.copy(r.base).y += y
+      if (id === sel && r.present && Number.isNaN(r.leaveStart)) {
+        this.selTargetBuf.pos.copy(this.tmpV)
+        this.selTargetBuf.spin = r.spin
+        this.selTarget = this.selTargetBuf
+      }
       this.tmpM.compose(this.tmpV, this.tmpQ, this.tmpS.setScalar(Math.max(s, 1e-4)))
       for (const m of this.meshes) m.setMatrixAt(id, this.tmpM)
     }
