@@ -23,14 +23,18 @@ export interface DebrisDims {
 
 const POOL = 640
 const PER_TILE = 32
-const SIZE: [number, number] = [0.05, 0.14]
+const SIZE: [number, number] = [0.15, 0.24]
 const OUT: [number, number] = [0.3, 1.0] // outward from tile centre, units/s
 const UP: [number, number] = [2.2, 6.2]
 const TOWARD_CAM: [number, number] = [2.5, 4.5] // tune: 0 = no "out of the screen" flight
 const SPIN: [number, number] = [5, 16] // rad/s
 const GRAVITY = 20
-const LIFE = 2.2 // s, hard cap
+const LIFE = 2.0 // s, hard cap
 const NEAR_FADE: [number, number] = [1.2, 4.0] // shrink to 0 between these camera distances
+const BOUNCE = 0.3 // vertical restitution on landing
+const MAX_BOUNCES = 2
+const LAND_TOL = 0.05 // a crumb this close above a surface last frame counts as landing on it
+const FRICTION = 9 // 1/s, horizontal damping while resting on a surface
 
 const IVORY = new THREE.Color('#f6efdc')
 const IVORY_DARK = new THREE.Color('#e4d9bd')
@@ -41,6 +45,11 @@ const rand = (a: number, b: number) => a + Math.random() * (b - a)
 
 export class Debris {
   readonly mesh: THREE.InstancedMesh
+  /**
+   * Surface height under a table-local (x, z): the top of the highest present
+   * tile there, or 0 on the cloth. Provided by the renderer (a heightfield).
+   */
+  groundAt: (x: number, z: number) => number = () => 0
   private pos = new Float32Array(POOL * 3)
   private vel = new Float32Array(POOL * 3)
   private axis: THREE.Vector3[] = []
@@ -149,18 +158,42 @@ export class Debris {
         continue
       }
       const i3 = i * 3
+      const x0 = this.pos[i3]
+      const y0 = this.pos[i3 + 1]
+      const z0 = this.pos[i3 + 2]
       this.vel[i3 + 1] -= GRAVITY * dt
       this.pos[i3] += this.vel[i3] * dt
       this.pos[i3 + 1] += this.vel[i3 + 1] * dt
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt
-      // one damped bounce on the table, then let it settle/slide out
-      if (this.pos[i3 + 1] < 0 && this.vel[i3 + 1] < 0) {
-        this.pos[i3 + 1] = 0
-        this.vel[i3 + 1] *= this.bounced[i] ? 0 : -0.3
-        this.vel[i3] *= 0.5
-        this.vel[i3 + 2] *= 0.5
-        this.spin[i] *= 0.4
-        this.bounced[i] = 1
+
+      // collide with the heightfield (cloth + tile tops)
+      let g = this.groundAt(this.pos[i3], this.pos[i3 + 2])
+      if (this.pos[i3 + 1] < g && y0 < g - LAND_TOL) {
+        // came in from the side of a taller stack: undo the horizontal step, knock it back
+        this.pos[i3] = x0
+        this.pos[i3 + 2] = z0
+        this.vel[i3] *= -0.3
+        this.vel[i3 + 2] *= -0.3
+        g = this.groundAt(x0, z0)
+      }
+      if (this.pos[i3 + 1] < g) {
+        // landed on top of the surface
+        this.pos[i3 + 1] = g
+        if (this.vel[i3 + 1] < 0) {
+          const impact = -this.vel[i3 + 1]
+          this.vel[i3 + 1] = this.bounced[i] < MAX_BOUNCES && impact > 0.8 ? impact * BOUNCE : 0
+          if (this.bounced[i] < 255) this.bounced[i]++
+          this.vel[i3] *= 0.6
+          this.vel[i3 + 2] *= 0.6
+          this.spin[i] *= 0.4
+        }
+      }
+      if (this.pos[i3 + 1] - g < 1e-3) {
+        // resting / sliding on a surface: friction; it falls again if it slides off an edge
+        const f = Math.exp(-FRICTION * dt)
+        this.vel[i3] *= f
+        this.vel[i3 + 2] *= f
+        this.spin[i] *= Math.exp(-6 * dt)
       }
       this.angle[i] += this.spin[i] * dt
 

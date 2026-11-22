@@ -48,6 +48,7 @@ const LEAVE = 0.45 // matched tile dissolve duration
 const FIELD_NOISE = 0.6
 const FIELD_HEIGHT = 0.4
 const OVERSHOOT = 1.1 // progress past 1 so every fragment is gone before the tile is hidden
+const HF_CELL = 0.08 // crumb heightfield resolution (world units)
 const dissolveField = (y01: number, n: number) => FIELD_NOISE * n + FIELD_HEIGHT * (1 - y01)
 
 // parallax
@@ -121,6 +122,8 @@ export class BoardRenderer {
   private aDissolve: THREE.InstancedBufferAttribute
   private debris: Debris
   private camLocal = new THREE.Vector3()
+  /** Heightfield of present tile tops over the board (table-local), for crumbs to land on. */
+  private hf = { x0: 0, z0: 0, nx: 0, nz: 0, h: new Float32Array(0) }
   private disposables: Array<{ dispose(): void }> = []
   private key!: THREE.SpotLight
   private palm: THREE.Texture | null = null
@@ -215,7 +218,8 @@ export class BoardRenderer {
     this.aDissolve = new THREE.InstancedBufferAttribute(new Float32Array(maxTiles), 1)
     for (const g of [back, body, face]) g.setAttribute('aDissolve', this.aDissolve)
 
-    this.debris = new Debris({ w: TW, d: TD, h: TH, backFrac: 0.28 }) // fewer green crumbs than the true back thickness: reads better
+    this.debris = new Debris({ w: TW, d: TD, h: TH, backFrac: 0.28 })
+    this.debris.groundAt = this.groundAt // fewer green crumbs than the true back thickness: reads better
     this.table.add(this.debris.mesh)
     this.disposables.push(this.debris)
 
@@ -261,6 +265,7 @@ export class BoardRenderer {
       })
     }
     this.aCell.needsUpdate = true
+    this.rebuildHeightfield()
     ;(this.aDissolve.array as Float32Array).fill(0)
     this.aDissolve.needsUpdate = true
     this.debris.clear()
@@ -275,10 +280,12 @@ export class BoardRenderer {
   sync(state: BoardState) {
     this.state = state
     const present = new Set(state.tiles.map((t) => t.id))
+    let removed = false
     const now = this.timer.getElapsed()
     for (const r of this.rt) {
       if (r.present && !present.has(r.tile.id)) {
         r.present = false
+        removed = true
         if (this.reducedMotion) this.hide(r)
         else {
           r.leaveStart = now
@@ -289,6 +296,7 @@ export class BoardRenderer {
         }
       }
     }
+    if (removed) this.rebuildHeightfield() // matched tiles no longer support crumbs
     if (this.hovered !== null && !present.has(this.hovered)) this.setHovered(null)
     this.writeStates()
     this.dirty = true
@@ -598,6 +606,56 @@ export class BoardRenderer {
     }
     for (const m of this.meshes) m.instanceMatrix.needsUpdate = true
     return animating
+  }
+
+  /**
+   * Rebuild the crumb heightfield: a grid of HF_CELL cells over the board, each
+   * holding the top of the highest *present* tile covering it (0 = cloth).
+   * Tile spin (±2°) is ignored. Cheap (~20k cell writes), so it runs only when
+   * the set of tiles changes: on a deal and when a match starts.
+   */
+  private rebuildHeightfield() {
+    const hf = this.hf
+    if (this.rt.length === 0) {
+      hf.nx = hf.nz = 0
+      return
+    }
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
+    for (const r of this.rt) {
+      minX = Math.min(minX, r.base.x - TW / 2)
+      maxX = Math.max(maxX, r.base.x + TW / 2)
+      minZ = Math.min(minZ, r.base.z - TD / 2)
+      maxZ = Math.max(maxZ, r.base.z + TD / 2)
+    }
+    hf.x0 = minX
+    hf.z0 = minZ
+    hf.nx = Math.ceil((maxX - minX) / HF_CELL) + 1
+    hf.nz = Math.ceil((maxZ - minZ) / HF_CELL) + 1
+    if (hf.h.length !== hf.nx * hf.nz) hf.h = new Float32Array(hf.nx * hf.nz)
+    else hf.h.fill(0)
+    for (const r of this.rt) {
+      if (!r.present) continue
+      const top = r.base.y + TH
+      const ix0 = Math.max(0, Math.floor((r.base.x - TW / 2 - hf.x0) / HF_CELL))
+      const ix1 = Math.min(hf.nx - 1, Math.floor((r.base.x + TW / 2 - hf.x0) / HF_CELL))
+      const iz0 = Math.max(0, Math.floor((r.base.z - TD / 2 - hf.z0) / HF_CELL))
+      const iz1 = Math.min(hf.nz - 1, Math.floor((r.base.z + TD / 2 - hf.z0) / HF_CELL))
+      for (let iz = iz0; iz <= iz1; iz++) {
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const k = iz * hf.nx + ix
+          if (top > hf.h[k]) hf.h[k] = top
+        }
+      }
+    }
+  }
+
+  /** Surface height at a table-local (x, z): highest present tile top, else the cloth (0). */
+  private groundAt = (x: number, z: number): number => {
+    const hf = this.hf
+    const ix = Math.floor((x - hf.x0) / HF_CELL)
+    const iz = Math.floor((z - hf.z0) / HF_CELL)
+    if (ix < 0 || iz < 0 || ix >= hf.nx || iz >= hf.nz) return 0
+    return hf.h[iz * hf.nx + ix]
   }
 
   /** Camera position in table-local space (the table tilts/pans). */
