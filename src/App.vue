@@ -6,6 +6,7 @@ const GameBoard3D = defineAsyncComponent(() => import('./components/GameBoard3D.
 import NameForm from './components/NameForm.vue'
 import { useGame } from './game/useGame'
 import { DEFAULT_LAYOUT, DEFAULT_TALL_LAYOUT, LAYOUTS } from './game/layouts'
+import { DEFAULT_FACE_SET, FACE_SETS, type FaceSetId } from './faces/faceSets'
 import { playFanfare, setMuted, unlockAudio } from './fx/sound'
 import { setAmbienceEnabled, startAmbience } from './fx/ambience'
 
@@ -13,6 +14,7 @@ const STORAGE_KEY = 'mahjong.playerName'
 const SOUND_KEY = 'mahjong.sound'
 const AMBIENCE_KEY = 'mahjong.ambience'
 const LAYOUT_KEY = 'mahjong.layout'
+const FACES_KEY = 'mahjong.faces'
 
 function loadName(): string {
   try {
@@ -164,6 +166,26 @@ const LAYOUT_GROUPS = [
   { label: 'Tall screens (phones)', layouts: LAYOUTS.filter((l) => l.shape === 'tall') },
 ]
 
+// tile pictures: remembered; switching keeps the current game (only the art changes)
+const faceSet = ref<FaceSetId>(
+  (() => {
+    try {
+      const id = localStorage.getItem(FACES_KEY)
+      return FACE_SETS.some((f) => f.id === id) ? (id as FaceSetId) : DEFAULT_FACE_SET
+    } catch {
+      return DEFAULT_FACE_SET
+    }
+  })(),
+)
+
+function changeFaces() {
+  try {
+    localStorage.setItem(FACES_KEY, faceSet.value)
+  } catch {
+    /* ignore */
+  }
+}
+
 function changeLayout() {
   try {
     localStorage.setItem(LAYOUT_KEY, layoutId.value)
@@ -209,6 +231,12 @@ function start(name: string) {
           </optgroup>
         </select>
       </label>
+      <label class="toggle">
+        Style
+        <select v-model="faceSet" @change="changeFaces">
+          <option v-for="f in FACE_SETS" :key="f.id" :value="f.id">{{ f.name }}</option>
+        </select>
+      </label>
       <span>Tiles: {{ tiles.length }}</span>
       <span>Moves available: {{ availablePairs }}</span>
       <label class="toggle"><input v-model="showFree" type="checkbox" /> Show pickable</label>
@@ -220,7 +248,7 @@ function start(name: string) {
     </header>
 
     <section class="table">
-      <component :is="webgl ? GameBoard3D : GameBoard" :tiles="tiles" :deal-id="dealId" :free-ids="freeIds" :selected-id="selectedId" :hint-ids="hintIds" :show-free="showFree" @pick="pick" @ready="onBoardReady" />
+      <component :is="webgl ? GameBoard3D : GameBoard" :tiles="tiles" :deal-id="dealId" :free-ids="freeIds" :selected-id="selectedId" :hint-ids="hintIds" :show-free="showFree" :face-set="faceSet" @pick="pick" @ready="onBoardReady" />
       <div v-if="won" class="victory" :style="{ '--delay': `${VICTORY_MS}ms` }">
         <p class="kicker">The table is clear</p>
         <h1 class="title">Well done!</h1>

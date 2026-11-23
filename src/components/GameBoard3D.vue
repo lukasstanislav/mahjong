@@ -9,6 +9,7 @@ import type { Tile } from '../game/deal'
 import { ParticleLayer } from '../fx/particles'
 import { playBurst, playClack, playHonk, playLaunch, playMatch, playPick } from '../fx/sound'
 import { BoardRenderer } from '../three/BoardRenderer'
+import type { FaceSetId } from '../faces/faceSets'
 
 const props = defineProps<{
   tiles: Tile[]
@@ -17,6 +18,7 @@ const props = defineProps<{
   selectedId: number | null
   hintIds: readonly [number, number] | null
   showFree: boolean
+  faceSet: FaceSetId
 }>()
 const emit = defineEmits<{ pick: [id: number]; ready: [] }>()
 
@@ -56,6 +58,8 @@ onMounted(() => {
       onBurst: (x, size, crackle) => playBurst(panAt(x), size, crackle),
     },
     reducedMotion,
+    144,
+    props.faceSet,
   )
   ro = new ResizeObserver(([e]) => {
     const { width, height } = e.contentRect
@@ -82,6 +86,7 @@ watch(() => props.dealId, () => {
   board?.deal(props.tiles)
   board?.sync(state())
 })
+watch(() => props.faceSet, (id) => board?.setFaceSet(id))
 watch(() => [props.tiles, props.freeIds, props.selectedId, props.hintIds, props.showFree], () => board?.sync(state()))
 
 /** Stereo pan (-1..1) from a canvas x coordinate in CSS px. */

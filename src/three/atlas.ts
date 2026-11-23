@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import type { Face } from '../game/tiles'
+import type { Face, Suit } from '../game/tiles'
+import { faceSvg, type FaceSetId } from '../faces/faceSets'
 
 /**
  * Face texture atlas, built at runtime on a 2D canvas.
@@ -8,6 +9,8 @@ import type { Face } from '../game/tiles'
  *   each symbol is wrapped in a standalone <svg> that inlines the whole sprite
  *   (symbols reference shared <g>s), loaded as an <img>, drawn into its cell.
  * - 8 flowers/seasons (absent from the sprite) drawn as CJK text.
+ * - Generated face sets (src/faces) instead rasterise all 42 cells from
+ *   their own standalone SVGs; recolouring and CJK text don't apply.
  *
  * Recolouring: the sprite stays unmodified on disk. Each cell gets its own
  * copy of the sprite text, so for bamboo cells (s1–s9) black fills are
@@ -53,6 +56,18 @@ export function cellIndex(f: Face): number {
   }
 }
 
+/** Inverse of cellIndex. */
+export function faceAt(i: number): Face {
+  const groups: Array<[Suit, number]> = [['characters', 9], ['dots', 9], ['bamboo', 9], ['wind', 4], ['dragon', 3], ['flower', 4], ['season', 4]]
+  let start = 0
+  for (const [suit, n] of groups) {
+    if (i < start + n) return { suit, rank: i - start + 1 }
+    start += n
+  }
+  throw new Error(`No face at cell ${i}`)
+}
+export const CELL_COUNT = 42
+
 /** Bottom-left UV of a cell (texture has flipY = true, so row 0 is at v = 1). */
 export function cellOffset(i: number): [number, number] {
   const col = i % COLS
@@ -72,7 +87,8 @@ const ENGRAVE_SOFTEN = 2.5
 /** Colour distance from IVORY at which a pixel starts / is fully engraved. */
 const ENGRAVE_RAMP: [number, number] = [18, 110]
 
-export function createAtlas(spriteUrl: string): FaceAtlas {
+export function createAtlas(faceSet: FaceSetId): FaceAtlas {
+  const spriteUrl = `${import.meta.env.BASE_URL}tiles.svg`
   const canvas = document.createElement('canvas')
   canvas.width = CW * COLS
   canvas.height = CH * ROWS
@@ -81,6 +97,46 @@ export function createAtlas(spriteUrl: string): FaceAtlas {
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
   const cellXY = (i: number) => [(i % COLS) * CW, Math.floor(i / COLS) * CH] as const
+
+  const heightCanvas = document.createElement('canvas')
+  heightCanvas.width = canvas.width
+  heightCanvas.height = canvas.height
+  const height = new THREE.CanvasTexture(heightCanvas) // data, not colour: NoColorSpace
+  height.generateMipmaps = true
+  height.minFilter = THREE.LinearMipmapLinearFilter
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.generateMipmaps = true
+  texture.minFilter = THREE.LinearMipmapLinearFilter
+
+  const drawSvg = async (svg: string, i: number) => {
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+    try {
+      const img = new Image()
+      img.src = url
+      await img.decode()
+      const [x, y] = cellXY(i)
+      ctx.drawImage(img, x, y, CW, CH)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  }
+
+  if (faceSet !== 'classic') {
+    void Promise.all(
+      Array.from({ length: CELL_COUNT }, (_, i) =>
+        // the generated SVGs share the sprite's 320×446 box, so they fill the cell the same way
+        drawSvg(faceSvg(faceSet, faceAt(i)).replace('<svg ', `<svg width="${CW}" height="${CH}" `), i),
+      ),
+    )
+      .then(() => {
+        texture.needsUpdate = true
+        rebuildHeight()
+      })
+      .catch((e) => console.warn('Tile atlas: face set failed to render', e))
+    return finish()
+  }
 
   // Flowers & seasons
   ctx.textAlign = 'center'
@@ -96,11 +152,6 @@ export function createAtlas(spriteUrl: string): FaceAtlas {
     ctx.fillText(String((k % 4) + 1), x + CW * 0.8, y + CH * 0.87)
   })
 
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.colorSpace = THREE.SRGBColorSpace
-  texture.generateMipmaps = true
-  texture.minFilter = THREE.LinearMipmapLinearFilter
-
   void (async () => {
     try {
       const text = await (await fetch(spriteUrl)).text()
@@ -113,16 +164,7 @@ export function createAtlas(spriteUrl: string): FaceAtlas {
             `width="${CW}" height="${CH}" viewBox="0 0 320 446">${defs}` +
             // the sprite's #tile rect has no fill and inherits ours
             `<use href="#${id}" xlink:href="#${id}" fill="transparent"/></svg>`
-          const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
-          try {
-            const img = new Image()
-            img.src = url
-            await img.decode()
-            const [x, y] = cellXY(i)
-            ctx.drawImage(img, x, y, CW, CH)
-          } finally {
-            URL.revokeObjectURL(url)
-          }
+          await drawSvg(svg, i)
         }),
       )
       texture.needsUpdate = true
@@ -132,20 +174,17 @@ export function createAtlas(spriteUrl: string): FaceAtlas {
     }
   })()
 
+  return finish()
+
   // --- height map for the engraving, derived from the colour atlas ---
-  const heightCanvas = document.createElement('canvas')
-  heightCanvas.width = canvas.width
-  heightCanvas.height = canvas.height
-  const height = new THREE.CanvasTexture(heightCanvas) // data, not colour: NoColorSpace
-  height.generateMipmaps = true
-  height.minFilter = THREE.LinearMipmapLinearFilter
   function rebuildHeight() {
     buildHeight(canvas, heightCanvas)
     height.needsUpdate = true
   }
-  rebuildHeight() // placeholders now; again once the sprite has loaded
-
-  return { color: texture, height }
+  function finish(): FaceAtlas {
+    rebuildHeight() // placeholders now; again once the art has loaded
+    return { color: texture, height }
+  }
 }
 
 /**

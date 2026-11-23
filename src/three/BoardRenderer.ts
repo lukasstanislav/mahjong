@@ -6,7 +6,8 @@ import { SelectionFx, type SelectionTarget } from './SelectionFx'
 import { Debris } from './Debris'
 import { Fireworks } from './Fireworks'
 import { matchKey } from '../game/tiles'
-import { CELL_UV, FACE_ASPECT, IVORY, cellIndex, cellOffset, createAtlas } from './atlas'
+import { CELL_UV, FACE_ASPECT, IVORY, cellIndex, cellOffset, createAtlas, type FaceAtlas } from './atlas'
+import type { FaceSetId } from '../faces/faceSets'
 
 /**
  * WebGL board (three.js). Imperative and framework-free; GameBoard3D.vue owns it.
@@ -178,6 +179,9 @@ export class BoardRenderer {
   /** Heightfield of present tile tops over the board (table-local), for crumbs to land on. */
   private hf = { x0: 0, z0: 0, nx: 0, nz: 0, h: new Float32Array(0) }
   private disposables: Array<{ dispose(): void }> = []
+  private faceMat: THREE.MeshStandardMaterial
+  private faceAtlas: FaceAtlas
+  private faceSet: FaceSetId
   private key!: THREE.SpotLight
   private hemi!: THREE.HemisphereLight
   private palm: THREE.Texture | null = null
@@ -215,6 +219,7 @@ export class BoardRenderer {
     private cb: BoardCallbacks = {},
     private reducedMotion = false,
     maxTiles = 144,
+    faceSet: FaceSetId = 'classic',
   ) {
     const r = new THREE.WebGLRenderer({ canvas, antialias: true })
     r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
@@ -240,11 +245,14 @@ export class BoardRenderer {
     const bodyMat = new THREE.MeshStandardMaterial({ color: IVORY, roughness: 0.38 })
     backMat.onBeforeCompile = injectDissolve
     bodyMat.onBeforeCompile = injectDissolve
-    const { color: atlas, height: faceHeight } = createAtlas(`${import.meta.env.BASE_URL}tiles.svg`)
+    this.faceSet = faceSet
+    this.faceAtlas = createAtlas(faceSet)
+    const { color: atlas, height: faceHeight } = this.faceAtlas
     atlas.anisotropy = faceHeight.anisotropy = r.capabilities.getMaxAnisotropy()
     // engraved face: the ink is pressed into the tile (bump map derived from the art)
     const faceMat = new THREE.MeshStandardMaterial({ map: atlas, bumpMap: faceHeight, bumpScale: ENGRAVE_DEPTH, roughness: 0.38 })
     this.patchFaceMaterial(faceMat)
+    this.faceMat = faceMat
 
     const mk = (g: THREE.BufferGeometry, m: THREE.Material, shadows: boolean) => {
       const im = new THREE.InstancedMesh(g, m, maxTiles)
@@ -279,7 +287,7 @@ export class BoardRenderer {
     this.table.add(this.debris.mesh)
     this.disposables.push(this.debris)
 
-    this.disposables.push(back, body, face, pick, backMat, bodyMat, faceMat, atlas, faceHeight, this.pickMesh.material as THREE.Material)
+    this.disposables.push(back, body, face, pick, backMat, bodyMat, faceMat, this.pickMesh.material as THREE.Material)
 
     this.fireworks = new Fireworks()
     this.fireworks.groundAt = this.groundAt
@@ -477,6 +485,20 @@ export class BoardRenderer {
     this.cb.onLeave?.(((p.x + 1) / 2) * this.width, ((1 - p.y) / 2) * this.height)
   }
 
+  /** Swap the tile pictures (see src/faces). The tiles keep their faces; only the art changes. */
+  setFaceSet(id: FaceSetId) {
+    if (id === this.faceSet) return
+    this.faceSet = id
+    const old = this.faceAtlas
+    this.faceAtlas = createAtlas(id)
+    this.faceAtlas.color.anisotropy = this.faceAtlas.height.anisotropy = this.renderer.capabilities.getMaxAnisotropy()
+    this.faceMat.map = this.faceAtlas.color
+    this.faceMat.bumpMap = this.faceAtlas.height
+    old.color.dispose()
+    old.height.dispose()
+    this.dirty = true
+  }
+
   /** Victory fireworks are scheduled or in the air. */
   get celebrating() {
     return this.fireworks.active
@@ -525,6 +547,8 @@ export class BoardRenderer {
     this.renderer.setAnimationLoop(null)
     this.timer.dispose()
     for (const d of this.disposables) d.dispose()
+    this.faceAtlas.color.dispose()
+    this.faceAtlas.height.dispose()
     this.renderer.dispose()
   }
 

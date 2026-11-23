@@ -21,6 +21,7 @@ import type { Tile } from '../game/deal'
 import { ParticleLayer } from '../fx/particles'
 import { playBurst, playClack, playHonk, playLaunch, playMatch, playPick } from '../fx/sound'
 import TileFace from './TileFace.vue'
+import type { FaceSetId } from '../faces/faceSets'
 
 const props = defineProps<{
   tiles: Tile[]
@@ -29,6 +30,7 @@ const props = defineProps<{
   selectedId: number | null
   hintIds: readonly [number, number] | null
   showFree: boolean
+  faceSet: FaceSetId
 }>()
 const emit = defineEmits<{ pick: [id: number]; ready: [] }>()
 
@@ -312,7 +314,7 @@ function crash(a: HTMLElement, b: HTMLElement | undefined) {
           @click="onTileClick(d.tile.id, d.free)"
         >
           <svg class="art" :width="W" :height="H" :viewBox="`0 0 ${W} ${H}`" aria-hidden="true">
-            <TileFace :face="d.tile.face" />
+            <TileFace :face="d.tile.face" :face-set="faceSet" />
           </svg>
         </div>
       </TransitionGroup>

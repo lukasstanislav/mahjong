@@ -8,11 +8,15 @@
  * with no fill of its own. It inherits `fill` from our <use>, so we pass
  * `fill="transparent"` to keep the ivory tile body drawn by GameBoard.
  * The sprite has no flowers or seasons, so those are still drawn here.
+ *
+ * Generated face sets (src/faces) are standalone SVGs, shown as an <image>.
  */
 import { computed } from 'vue'
 import type { Face } from '../game/tiles'
+import { faceDataUrl, type FaceSetId } from '../faces/faceSets'
 
-const props = defineProps<{ face: Face }>()
+const props = defineProps<{ face: Face; faceSet: FaceSetId }>()
+const generated = computed(() => (props.faceSet === 'classic' ? null : faceDataUrl(props.faceSet, props.face)))
 
 const SPRITE = `${import.meta.env.BASE_URL}tiles.svg`
 const WINDS = ['tan', 'nan', 'xia', 'pei'] // E S W N
@@ -35,7 +39,8 @@ const symbolId = computed((): string | null => {
 
 <template>
   <g class="face">
-    <use v-if="symbolId" :href="`${SPRITE}#${symbolId}`" x="2" y="2" width="56" height="76" fill="transparent" />
+    <image v-if="generated" :href="generated" x="2" y="2" width="56" height="76" />
+    <use v-else-if="symbolId" :href="`${SPRITE}#${symbolId}`" x="2" y="2" width="56" height="76" fill="transparent" />
     <template v-else>
       <text x="30" y="52" class="glyph" font-size="34"
             :fill="face.suit === 'flower' ? '#b0306a' : '#1f5fa8'">
