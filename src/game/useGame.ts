@@ -1,12 +1,14 @@
 import { computed, ref, shallowRef } from 'vue'
 import { dealSolvable, type Tile } from './deal'
-import { isFree, turtleLayout } from './layout'
+import { isFree } from './layout'
+import { DEFAULT_LAYOUT, getLayout } from './layouts'
 import { canMatch, matchKey } from './tiles'
 import { findPairs, randomHint, type Pair } from './hint'
 
 /** Game state + rules. Pure UI components consume this; it has no DOM access. */
 export function useGame() {
-  const layout = turtleLayout()
+  /** Layout for the next deal (see layouts.ts). Changing it doesn't redeal by itself. */
+  const layoutId = ref(DEFAULT_LAYOUT)
   const tiles = shallowRef<Tile[]>([])
   const selectedId = ref<number | null>(null)
   const moves = ref(0)
@@ -16,7 +18,7 @@ export function useGame() {
   const hintIds = shallowRef<Pair | null>(null)
 
   function newGame() {
-    tiles.value = dealSolvable(layout).tiles
+    tiles.value = dealSolvable(getLayout(layoutId.value).positions).tiles
     dealId.value++
     selectedId.value = null
     moves.value = 0
@@ -73,5 +75,5 @@ export function useGame() {
     }
   }
 
-  return { tiles, dealId, selectedId, hintIds, freeIds, availablePairs, moves, won, stuck, newGame, pick, hint }
+  return { layoutId, tiles, dealId, selectedId, hintIds, freeIds, availablePairs, moves, won, stuck, newGame, pick, hint }
 }

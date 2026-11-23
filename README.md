@@ -13,7 +13,8 @@ No account and no backend. Type a name and the tiles drop onto the table.
 - Click a **free** tile to pick it. A tile is free when nothing lies on top of it and its left or right side is open.
 - Click a second free tile of the same kind and both are removed. A different kind becomes your new first pick.
 - Flowers match any flower, and seasons match any season.
-- Clear all 144 tiles to win. **Every deal is guaranteed solvable.**
+- Clear the board to win. **Every deal is guaranteed solvable.**
+- Pick a layout in the top bar: **Turtle** (the classic, 144 tiles), **Dragon** (a long ridge, only a few tiles free at first, so the toughest start), **Pyramid** (deep stacks), **Fortress** (walls and corner towers) or **Spider** (a body with eight legs, lots of choice). Your choice is remembered.
 
 Stuck? Press **Help** to make a possible pair float above the table. Each press shows a different pair. Help also kicks in by itself 5 seconds after the tiles are laid, and after 30 seconds without a click. Turn on *Show pickable* to dim the blocked tiles. Click during the opening deal to skip it.
 

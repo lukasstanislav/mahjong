@@ -37,7 +37,18 @@ const GAP = 7 // space between neighbouring tiles; must absorb MAX_SPIN corner s
 const MAX_SPIN = 2 // random resting rotation, ±deg
 const STEP_X = (W + GAP) / 2 // px per half-tile unit
 const STEP_Y = (H + GAP) / 2
-const VIEW = { x: -40, y: -50, w: 14 * (W + GAP) + W + 80, h: 7 * (H + GAP) + H + 100 }
+/** Board bounds in unscaled px, recomputed per deal (layouts differ in size and may use negative coordinates). */
+const view = ref({ x: -40, y: -50, w: 14 * (W + GAP) + W + 80, h: 7 * (H + GAP) + H + 100 })
+const wrapSize = ref({ w: 1, h: 1 })
+
+function fitView(tiles: Tile[]) {
+  if (!tiles.length) return
+  const xs = tiles.map((t) => t.pos.x * STEP_X - t.pos.z * LAYER_SHIFT)
+  const ys = tiles.map((t) => t.pos.y * STEP_Y - t.pos.z * LAYER_SHIFT)
+  const x0 = Math.min(...xs) - 40
+  const y0 = Math.min(...ys) - 50
+  view.value = { x: x0, y: y0, w: Math.max(...xs) + W + 40 - x0, h: Math.max(...ys) + H + 50 - y0 }
+}
 const TILT_DEG = 16
 const FIT = 0.94 // headroom for the tilt's perspective growth
 
@@ -53,8 +64,8 @@ const reducedMotion =
 const drawn = computed(() =>
   props.tiles.map((t) => ({
     tile: t,
-    left: t.pos.x * STEP_X - t.pos.z * LAYER_SHIFT - VIEW.x,
-    top: t.pos.y * STEP_Y - t.pos.z * LAYER_SHIFT - VIEW.y,
+    left: t.pos.x * STEP_X - t.pos.z * LAYER_SHIFT - view.value.x,
+    top: t.pos.y * STEP_Y - t.pos.z * LAYER_SHIFT - view.value.y,
     // hinted tiles float, so draw them above everything
     zIndex: (props.hintIds?.includes(t.id) ? 100000 : 0) + t.pos.z * 10000 + (t.pos.x + t.pos.y) * 100 + t.pos.x,
     hint: props.hintIds ? props.hintIds.indexOf(t.id) : -1,
@@ -67,7 +78,7 @@ const drawn = computed(() =>
 
 const wrap = ref<HTMLDivElement>()
 const canvas = ref<HTMLCanvasElement>()
-const scale = ref(1)
+const scale = computed(() => Math.min(wrapSize.value.w / view.value.w, wrapSize.value.h / view.value.h) * FIT)
 let particles: ParticleLayer | null = null
 let ro: ResizeObserver | null = null
 
@@ -75,7 +86,7 @@ onMounted(() => {
   particles = new ParticleLayer(canvas.value!)
   ro = new ResizeObserver(([entry]) => {
     const { width, height } = entry.contentRect
-    scale.value = Math.min(width / VIEW.w, height / VIEW.h) * FIT
+    wrapSize.value = { w: width, h: height }
     particles?.resize(width, height)
   })
   ro.observe(wrap.value!)
@@ -101,6 +112,7 @@ function clearTimers() {
 }
 
 function onDeal() {
+  fitView(props.tiles)
   spin.value = new Map(props.tiles.map((t) => [t.id, `${((Math.random() * 2 - 1) * MAX_SPIN).toFixed(2)}deg`]))
   startIntro()
 }
@@ -184,8 +196,8 @@ function onLeave(el: Element) {
     <div
       class="board"
       :style="{
-        width: `${VIEW.w}px`,
-        height: `${VIEW.h}px`,
+        width: `${view.w}px`,
+        height: `${view.h}px`,
         transform: `translate(-50%, -50%) scale(${scale}) rotateX(${TILT_DEG}deg)`,
       }"
     >

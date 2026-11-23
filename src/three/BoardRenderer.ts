@@ -759,16 +759,19 @@ export class BoardRenderer {
   private fitCamera() {
     this.camera.clearViewOffset()
     if (this.rt.length === 0) return this.placeCamera()
-    const box = new THREE.Box3()
-    for (const r of this.rt) {
-      box.expandByPoint(this.tmpV.set(r.base.x - TW / 2, r.base.y, r.base.z - TD / 2))
-      box.expandByPoint(this.tmpV.set(r.base.x + TW / 2, r.base.y + TH, r.base.z + TD / 2))
-    }
-    box.expandByScalar(0.3)
+    // Fit the real tiles (8 corners each, padded for spin and the selection lift),
+    // not their bounding box: a box's top spans the whole area at the tallest
+    // stack's height, which over-frames tall layouts and crops flat ones.
+    const px = TW / 2 + 0.1
+    const pz = TD / 2 + 0.1
     const corners: THREE.Vector3[] = []
-    for (const x of [box.min.x, box.max.x])
-      for (const y of [box.min.y, box.max.y])
-        for (const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z))
+    for (const r of this.rt) {
+      for (const dx of [-px, px])
+        for (const dz of [-pz, pz])
+          for (const y of [r.base.y, r.base.y + TH + 0.15]) corners.push(new THREE.Vector3(r.base.x + dx, y, r.base.z + dz))
+    }
+    // FIT_FILL and VIEW_SHIFT_Y are upper bounds: zoom + shift may never push tiles off-screen
+    const fill = Math.min(FIT_FILL, 0.98 - 2 * Math.abs(VIEW_SHIFT_Y))
 
     const savedTilt = this.tilt.clone()
     this.tilt.set(0, 0)
@@ -784,7 +787,7 @@ export class BoardRenderer {
         hi.max(this.tmpV2)
       }
       const halfRange = Math.max(hi.x - lo.x, hi.y - lo.y) / 2
-      this.camDist *= halfRange / FIT_FILL
+      this.camDist *= halfRange / fill
     }
     // shift the frustum so the projected box is centred
     const cx = (lo.x + hi.x) / 2

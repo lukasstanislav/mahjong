@@ -5,12 +5,14 @@ import GameBoard from './components/GameBoard.vue'
 const GameBoard3D = defineAsyncComponent(() => import('./components/GameBoard3D.vue'))
 import NameForm from './components/NameForm.vue'
 import { useGame } from './game/useGame'
+import { DEFAULT_LAYOUT, LAYOUTS } from './game/layouts'
 import { setMuted, unlockAudio } from './fx/sound'
 import { setAmbienceEnabled, startAmbience } from './fx/ambience'
 
 const STORAGE_KEY = 'mahjong.playerName'
 const SOUND_KEY = 'mahjong.sound'
 const AMBIENCE_KEY = 'mahjong.ambience'
+const LAYOUT_KEY = 'mahjong.layout'
 
 function loadName(): string {
   try {
@@ -35,7 +37,7 @@ const player = ref<string | null>(null)
 const showFree = ref(false)
 const sound = ref(readSound())
 setMuted(!sound.value)
-const { tiles, dealId, selectedId, hintIds, freeIds, availablePairs, won, stuck, newGame, pick, hint } = useGame()
+const { layoutId, tiles, dealId, selectedId, hintIds, freeIds, availablePairs, won, stuck, newGame, pick, hint } = useGame()
 
 function readSound(): boolean {
   try {
@@ -111,6 +113,25 @@ function toggleAmbience() {
   }
 }
 
+// layout choice: remembered, and picking one starts a new game
+layoutId.value = (() => {
+  try {
+    const id = localStorage.getItem(LAYOUT_KEY)
+    return LAYOUTS.some((l) => l.id === id) ? id! : DEFAULT_LAYOUT
+  } catch {
+    return DEFAULT_LAYOUT
+  }
+})()
+
+function changeLayout() {
+  try {
+    localStorage.setItem(LAYOUT_KEY, layoutId.value)
+  } catch {
+    /* ignore */
+  }
+  deal()
+}
+
 function deal() {
   unlockAudio() // must run inside a user gesture
   void startAmbience() // idempotent: starts once, keeps playing across games
@@ -138,6 +159,12 @@ function start(name: string) {
   <main v-else class="game" @pointerdown.capture="onActivity">
     <header class="hud">
       <span class="player">{{ player }}</span>
+      <label class="toggle">
+        Layout
+        <select v-model="layoutId" @change="changeLayout">
+          <option v-for="l in LAYOUTS" :key="l.id" :value="l.id">{{ l.name }}</option>
+        </select>
+      </label>
       <span>Tiles: {{ tiles.length }}</span>
       <span>Moves available: {{ availablePairs }}</span>
       <label class="toggle"><input v-model="showFree" type="checkbox" /> Show pickable</label>
@@ -183,6 +210,15 @@ button {
   font-weight: 600;
   cursor: pointer;
 }
+select {
+  font: inherit;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+}
+select option { color: #1d2a1f; }
 button:disabled { opacity: 0.45; cursor: default; }
 button.ghost { background: transparent; color: inherit; border: 1px solid rgba(255, 255, 255, 0.35); }
 .table { position: relative; flex: 1; min-height: 0; padding: 16px; }
