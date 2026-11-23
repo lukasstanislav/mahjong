@@ -63,6 +63,9 @@ const DIM = 0.8
 const WHITE = new THREE.Color(1, 1, 1)
 const DIMMED = new THREE.Color(1 - DIM, 1 - DIM, 1 - DIM)
 
+// engraving: bump strength of the face art (0 = flat print)
+const ENGRAVE_DEPTH = 10.0
+
 // lighting
 const SUN_INTENSITY = 5.2 // key spotlight ("sun"); was 3.4
 const SUN_COLOR = '#ffecc8' // warm sunlight
@@ -196,9 +199,10 @@ export class BoardRenderer {
     const bodyMat = new THREE.MeshStandardMaterial({ color: IVORY, roughness: 0.38 })
     backMat.onBeforeCompile = injectDissolve
     bodyMat.onBeforeCompile = injectDissolve
-    const atlas = createAtlas(`${import.meta.env.BASE_URL}tiles.svg`)
-    atlas.anisotropy = r.capabilities.getMaxAnisotropy()
-    const faceMat = new THREE.MeshStandardMaterial({ map: atlas, roughness: 0.38 })
+    const { color: atlas, height: faceHeight } = createAtlas(`${import.meta.env.BASE_URL}tiles.svg`)
+    atlas.anisotropy = faceHeight.anisotropy = r.capabilities.getMaxAnisotropy()
+    // engraved face: the ink is pressed into the tile (bump map derived from the art)
+    const faceMat = new THREE.MeshStandardMaterial({ map: atlas, bumpMap: faceHeight, bumpScale: ENGRAVE_DEPTH, roughness: 0.38 })
     this.patchFaceMaterial(faceMat)
 
     const mk = (g: THREE.BufferGeometry, m: THREE.Material, shadows: boolean) => {
@@ -234,7 +238,7 @@ export class BoardRenderer {
     this.table.add(this.debris.mesh)
     this.disposables.push(this.debris)
 
-    this.disposables.push(back, body, face, pick, backMat, bodyMat, faceMat, atlas, this.pickMesh.material as THREE.Material)
+    this.disposables.push(back, body, face, pick, backMat, bodyMat, faceMat, atlas, faceHeight, this.pickMesh.material as THREE.Material)
 
     this.selFx = new SelectionFx({ w: TW, d: TD, h: TH, radius: RADIUS }, reducedMotion)
     this.table.add(this.selFx.group)
@@ -497,7 +501,7 @@ export class BoardRenderer {
           '#include <common>',
           '#include <common>\nattribute vec2 aCell;\nattribute vec3 aState;\nuniform vec2 uCellSize;\nvarying vec3 vState;',
         )
-        .replace('#include <uv_vertex>', '#include <uv_vertex>\nvMapUv = aCell + uv * uCellSize;\nvState = aState;')
+        .replace('#include <uv_vertex>', '#include <uv_vertex>\nvMapUv = aCell + uv * uCellSize;\n#ifdef USE_BUMPMAP\nvBumpMapUv = vMapUv;\n#endif\nvState = aState;')
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vState;')
         .replace(

@@ -60,7 +60,19 @@ export function cellOffset(i: number): [number, number] {
   return [col / COLS, 1 - (row + 1) / ROWS]
 }
 
-export function createAtlas(spriteUrl: string): THREE.CanvasTexture {
+export interface FaceAtlas {
+  /** Face art (sRGB). */
+  color: THREE.CanvasTexture
+  /** Height for bump mapping: ivory face = 1 (surface), ink = 0 (engraved), softened walls. */
+  height: THREE.CanvasTexture
+}
+
+/** How far around a stroke its engraved wall slopes (px in the atlas). */
+const ENGRAVE_SOFTEN = 2.5
+/** Colour distance from IVORY at which a pixel starts / is fully engraved. */
+const ENGRAVE_RAMP: [number, number] = [18, 110]
+
+export function createAtlas(spriteUrl: string): FaceAtlas {
   const canvas = document.createElement('canvas')
   canvas.width = CW * COLS
   canvas.height = CH * ROWS
@@ -114,10 +126,58 @@ export function createAtlas(spriteUrl: string): THREE.CanvasTexture {
         }),
       )
       texture.needsUpdate = true
+      rebuildHeight()
     } catch (e) {
       console.warn('Tile atlas: sprite failed to load', e)
     }
   })()
 
-  return texture
+  // --- height map for the engraving, derived from the colour atlas ---
+  const heightCanvas = document.createElement('canvas')
+  heightCanvas.width = canvas.width
+  heightCanvas.height = canvas.height
+  const height = new THREE.CanvasTexture(heightCanvas) // data, not colour: NoColorSpace
+  height.generateMipmaps = true
+  height.minFilter = THREE.LinearMipmapLinearFilter
+  function rebuildHeight() {
+    buildHeight(canvas, heightCanvas)
+    height.needsUpdate = true
+  }
+  rebuildHeight() // placeholders now; again once the sprite has loaded
+
+  return { color: texture, height }
+}
+
+/**
+ * Ink → engraving depth. Any pixel that differs from IVORY is ink; its height
+ * ramps from 1 (face surface) down to 0 (engraved floor) over ENGRAVE_RAMP.
+ * A small blur gives the strokes sloped walls, which bump mapping turns into
+ * a lit edge and a shaded edge. (ctx.filter is missing in older Safari; there
+ * the walls are just steeper.)
+ */
+function buildHeight(src: HTMLCanvasElement, dst: HTMLCanvasElement) {
+  const w = src.width
+  const h = src.height
+  const img = src.getContext('2d')!.getImageData(0, 0, w, h)
+  const d = img.data
+  const hex = parseInt(IVORY.slice(1), 16) // compare in canvas (sRGB) space
+  const ir = (hex >> 16) & 255
+  const ig = (hex >> 8) & 255
+  const ib = hex & 255
+  const [lo, hi] = ENGRAVE_RAMP
+  for (let i = 0; i < d.length; i += 4) {
+    const dist = Math.max(Math.abs(d[i] - ir), Math.abs(d[i + 1] - ig), Math.abs(d[i + 2] - ib))
+    const ink = Math.min(1, Math.max(0, (dist - lo) / (hi - lo)))
+    const v = Math.round(255 * (1 - ink))
+    d[i] = d[i + 1] = d[i + 2] = v
+    d[i + 3] = 255
+  }
+  const tmp = document.createElement('canvas')
+  tmp.width = w
+  tmp.height = h
+  tmp.getContext('2d')!.putImageData(img, 0, 0)
+  const out = dst.getContext('2d')!
+  out.filter = `blur(${ENGRAVE_SOFTEN}px)`
+  out.drawImage(tmp, 0, 0)
+  out.filter = 'none'
 }
