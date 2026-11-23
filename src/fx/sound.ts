@@ -367,3 +367,119 @@ export function playChime() {
     osc.stop(t + delay + 0.4)
   }
 }
+
+// ---- victory -------------------------------------------------------------------
+// All synthesised: a soft launch "fwip", a burst (low thump + filtered noise
+// bloom, optional crackle tail) and a short rising fanfare. Kept quiet and
+// toy-scale: these are fireworks over a card table, not a stadium.
+
+let noise: AudioBuffer | null = null
+function noiseBuffer(c: AudioContext) {
+  if (noise && noise.sampleRate === c.sampleRate) return noise
+  noise = c.createBuffer(1, c.sampleRate * 2, c.sampleRate)
+  const d = noise.getChannelData(0)
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1
+  return noise
+}
+
+function panner(c: AudioContext, pan: number) {
+  const p = c.createStereoPanner()
+  p.pan.value = Math.max(-1, Math.min(1, pan * 0.6))
+  p.connect(master!)
+  return p
+}
+
+/** A firework shell leaving the ground: short rising band of noise. */
+export function playLaunch(pan = 0) {
+  if (!ctx || !master || muted) return
+  const c = ctx
+  const t = c.currentTime
+  const src = c.createBufferSource()
+  src.buffer = noiseBuffer(c)
+  const bp = c.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.Q.value = 6
+  bp.frequency.setValueAtTime(rand(500, 700), t)
+  bp.frequency.exponentialRampToValueAtTime(rand(2600, 3600), t + 0.45)
+  const g = c.createGain()
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(0.09, t + 0.08)
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5)
+  src.connect(bp).connect(g).connect(panner(c, pan))
+  src.start(t, rand(0, 1.4))
+  src.stop(t + 0.55)
+}
+
+/** A shell bursting. `size` 0..1; `crackle` adds a tail of tiny pops. */
+export function playBurst(pan = 0, size = 0.7, crackle = false) {
+  if (!ctx || !master || muted) return
+  const c = ctx
+  const t = c.currentTime
+  const out = panner(c, pan)
+
+  // thump: a sine dropping in pitch
+  const osc = c.createOscillator()
+  osc.frequency.setValueAtTime(rand(110, 140), t)
+  osc.frequency.exponentialRampToValueAtTime(40, t + 0.3)
+  const og = c.createGain()
+  env(og, t, 0.35 * size, 0.35)
+  osc.connect(og).connect(out)
+  osc.start(t)
+  osc.stop(t + 0.4)
+
+  // bloom: noise through a closing low-pass
+  const src = c.createBufferSource()
+  src.buffer = noiseBuffer(c)
+  const lp = c.createBiquadFilter()
+  lp.type = 'lowpass'
+  lp.frequency.setValueAtTime(rand(3000, 4500), t)
+  lp.frequency.exponentialRampToValueAtTime(300, t + 0.9)
+  const ng = c.createGain()
+  env(ng, t, 0.22 * size, 1.0)
+  src.connect(lp).connect(ng).connect(out)
+  src.start(t, rand(0, 0.9))
+  src.stop(t + 1.05)
+
+  if (!crackle) return
+  // crackle: sparse high clicks, starting as the sparks start to twinkle
+  for (let i = 0; i < 26; i++) {
+    const at = t + rand(0.7, 1.9)
+    const s = c.createBufferSource()
+    s.buffer = noiseBuffer(c)
+    const hp = c.createBiquadFilter()
+    hp.type = 'highpass'
+    hp.frequency.value = rand(3000, 6000)
+    const g = c.createGain()
+    env(g, at, rand(0.03, 0.09), 0.025)
+    const p = c.createStereoPanner()
+    p.pan.value = Math.max(-1, Math.min(1, pan * 0.6 + rand(-0.25, 0.25)))
+    s.connect(hp).connect(g).connect(p).connect(master)
+    s.start(at, rand(0, 1.9))
+    s.stop(at + 0.03)
+  }
+}
+
+/** Victory: a quick rising pentatonic run ending on a held chord (bell-ish tones). */
+export function playFanfare() {
+  if (!ctx || !master || muted) return
+  const c = ctx
+  const t0 = c.currentTime + 0.02
+  // C major pentatonic, two octaves up to the tonic, then C-E-G together
+  const run = [523.25, 587.33, 659.25, 783.99, 880, 1046.5]
+  const step = 0.085
+  const tone = (f: number, at: number, peak: number, decay: number) => {
+    for (const [mult, lvl, type] of [[1, 1, 'triangle'], [2, 0.25, 'sine'], [3.01, 0.08, 'sine']] as const) {
+      const o = c.createOscillator()
+      o.type = type
+      o.frequency.value = f * mult
+      const g = c.createGain()
+      env(g, at, peak * lvl, decay)
+      o.connect(g).connect(master!)
+      o.start(at)
+      o.stop(at + decay + 0.05)
+    }
+  }
+  run.forEach((f, i) => tone(f, t0 + i * step, 0.11, 0.45))
+  const chordAt = t0 + run.length * step + 0.04
+  for (const f of [523.25, 659.25, 783.99, 1046.5]) tone(f, chordAt, 0.07, 1.8)
+}

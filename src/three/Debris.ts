@@ -40,6 +40,9 @@ const IVORY = new THREE.Color('#f6efdc')
 const IVORY_DARK = new THREE.Color('#e4d9bd')
 const GREEN = new THREE.Color('#1b6a48')
 const INK = [new THREE.Color('#1d1d1d'), new THREE.Color('#ba1920'), new THREE.Color('#0f6b35')]
+// the last pair of a game breaks into gold (and some red) instead, and flies harder
+const GOLD = [new THREE.Color('#f5c542'), new THREE.Color('#e0a526'), new THREE.Color('#fff0b8'), new THREE.Color('#d12a1f')]
+const GOLD_BOOST = 1.35 // velocity multiplier for the last pair
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a)
 
@@ -89,8 +92,19 @@ export class Debris {
    * @param base tile base centre (table-local), @param spin its Y rotation,
    * @param now clock time, @param dissolve seconds of the dissolve,
    * @param field (y01, noise) → dissolve-field value in 0..1 (must match the shader's weighting)
+   * @param gold the final pair: gold/red crumbs, thrown harder
+   * @param origin crumbs fly outward from here (default: the tile centre), e.g. the point where two tiles collided
    */
-  spawn(base: THREE.Vector3, spin: number, now: number, dissolve: number, camLocal: THREE.Vector3, field: (y01: number, n: number) => number) {
+  spawn(
+    base: THREE.Vector3,
+    spin: number,
+    now: number,
+    dissolve: number,
+    camLocal: THREE.Vector3,
+    field: (y01: number, n: number) => number,
+    gold = false,
+    origin: THREE.Vector3 = base,
+  ) {
     const { w, d, h, backFrac } = this.dims
     const c = Math.cos(spin)
     const sn = Math.sin(spin)
@@ -108,12 +122,13 @@ export class Debris {
       this.pos.set([px, py, pz], i3)
 
       // velocity: outward + up + toward the camera
-      const ox = px - base.x
-      const oz = pz - base.z
+      const ox = px - origin.x
+      const oz = pz - origin.z
       const ol = Math.hypot(ox, oz) || 1
       const out = rand(OUT[0], OUT[1])
       this.v.set(camLocal.x - px, camLocal.y - py, camLocal.z - pz).normalize().multiplyScalar(rand(TOWARD_CAM[0], TOWARD_CAM[1]))
-      this.vel.set([this.v.x + (ox / ol) * out, this.v.y + rand(UP[0], UP[1]), this.v.z + (oz / ol) * out], i3)
+      const boost = gold ? GOLD_BOOST : 1
+      this.vel.set([(this.v.x + (ox / ol) * out) * boost, (this.v.y + rand(UP[0], UP[1])) * boost, (this.v.z + (oz / ol) * out) * boost], i3)
 
       this.axis[i].set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize()
       this.angle[i] = rand(0, Math.PI * 2)
@@ -126,7 +141,9 @@ export class Debris {
       this.born[i] = this.release[i]
       this.bounced[i] = 0
 
-      const col = ly < h * backFrac ? GREEN : Math.random() < 0.06 ? INK[Math.floor(Math.random() * INK.length)] : Math.random() < 0.5 ? IVORY : IVORY_DARK
+      const col = gold
+        ? GOLD[Math.random() < 0.12 ? 3 : Math.floor(Math.random() * 3)]
+        : ly < h * backFrac ? GREEN : Math.random() < 0.06 ? INK[Math.floor(Math.random() * INK.length)] : Math.random() < 0.5 ? IVORY : IVORY_DARK
       this.mesh.setColorAt(i, col)
     }
     this.mesh.instanceColor!.needsUpdate = true

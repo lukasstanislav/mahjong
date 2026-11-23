@@ -7,7 +7,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Tile } from '../game/deal'
 import { ParticleLayer } from '../fx/particles'
-import { playClack, playHonk, playMatch, playPick } from '../fx/sound'
+import { playBurst, playClack, playHonk, playLaunch, playMatch, playPick } from '../fx/sound'
 import { BoardRenderer } from '../three/BoardRenderer'
 
 const props = defineProps<{
@@ -52,6 +52,8 @@ onMounted(() => {
       onLeave: (x) => playMatch(panAt(x)), // called per tile; playMatch plays once per pair
       onHover: (id) => (hoverFree.value = id !== null && props.freeIds.has(id)),
       onReady: () => emit('ready'),
+      onLaunch: (x) => playLaunch(panAt(x)),
+      onBurst: (x, size, crackle) => playBurst(panAt(x), size, crackle),
     },
     reducedMotion,
   )
@@ -64,7 +66,10 @@ onMounted(() => {
   board.deal(props.tiles)
   board.sync(state())
   // dev-only handle for automated browser checks (stripped from production builds)
-  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__mahjong = { board, props }
+  if (import.meta.env.DEV) {
+    const w = window as unknown as { __mahjong?: Record<string, unknown> }
+    w.__mahjong = Object.assign(w.__mahjong ?? {}, { board, props })
+  }
 })
 
 onBeforeUnmount(() => {
@@ -101,6 +106,8 @@ function onLeaveCanvas() {
 function onClick(e: MouseEvent) {
   if (!board) return
   if (board.introRunning) return board.skipIntro()
+  // cleared table: every click launches a shell that bursts under the cursor
+  if (props.tiles.length === 0 && board.celebrating) return board.launchAt(ndc(e))
   const id = board.pick(ndc(e))
   if (id === null) return
   if (props.freeIds.has(id)) {

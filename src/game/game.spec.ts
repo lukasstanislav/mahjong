@@ -66,3 +66,16 @@ describe('dealSolvable', () => {
     }
   })
 })
+
+describe('useGame.solveStep', () => {
+  it('clears a fresh deal and ends in a win', async () => {
+    const { useGame } = await import('./useGame')
+    const g = useGame()
+    g.newGame()
+    let steps = 0
+    while (g.tiles.value.length && g.solveStep()) steps++
+    expect(g.tiles.value).toHaveLength(0)
+    expect(steps).toBe(72)
+    expect(g.won.value).toBe(true)
+  })
+})

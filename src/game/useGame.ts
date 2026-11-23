@@ -3,7 +3,7 @@ import { dealSolvable, type Tile } from './deal'
 import { isFree } from './layout'
 import { DEFAULT_LAYOUT, getLayout } from './layouts'
 import { canMatch, matchKey } from './tiles'
-import { findPairs, randomHint, type Pair } from './hint'
+import { findPairs, randomHint, solverPair, type Pair } from './hint'
 
 /** Game state + rules. Pure UI components consume this; it has no DOM access. */
 export function useGame() {
@@ -16,9 +16,13 @@ export function useGame() {
   const dealId = ref(0)
   /** Pair currently shown by Help, or null. Cleared by any match and by a new deal. */
   const hintIds = shallowRef<Pair | null>(null)
+  /** The deal's recorded solution, for the dev auto-solver. */
+  let solution: Pair[] = []
 
   function newGame() {
-    tiles.value = dealSolvable(getLayout(layoutId.value).positions).tiles
+    const deal = dealSolvable(getLayout(layoutId.value).positions)
+    tiles.value = deal.tiles
+    solution = deal.solution
     dealId.value++
     selectedId.value = null
     moves.value = 0
@@ -28,6 +32,16 @@ export function useGame() {
   /** Show a random available matching pair (a different one on each press, when possible). */
   function hint() {
     hintIds.value = randomHint(findPairs(tiles.value, freeIds.value), hintIds.value)
+  }
+
+  /** Dev tool: play the next pair of the solution. Returns false when nothing could be played. */
+  function solveStep(): boolean {
+    const pair = solverPair(tiles.value, freeIds.value, solution)
+    if (!pair) return false
+    selectedId.value = null
+    pick(pair[0])
+    pick(pair[1])
+    return true
   }
 
   const freeIds = computed(() => {
@@ -75,5 +89,5 @@ export function useGame() {
     }
   }
 
-  return { layoutId, tiles, dealId, selectedId, hintIds, freeIds, availablePairs, moves, won, stuck, newGame, pick, hint }
+  return { layoutId, tiles, dealId, selectedId, hintIds, freeIds, availablePairs, moves, won, stuck, newGame, pick, hint, solveStep }
 }

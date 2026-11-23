@@ -33,3 +33,16 @@ export function randomHint(pairs: Pair[], previous: Pair | null, rnd: () => numb
   if (pool.length === 0) return null
   return pool[Math.floor(rnd() * pool.length)]
 }
+
+/**
+ * Next pair to play when auto-solving (dev tool). Follows the deal's recorded
+ * solution (see dealSolvable), which is guaranteed to clear the board when
+ * played from the start. If the player has deviated from it, falls back to
+ * any available pair, which may strand the board.
+ */
+export function solverPair(tiles: Tile[], freeIds: Set<number>, solution: readonly Pair[]): Pair | null {
+  const present = new Set(tiles.map((t) => t.id))
+  const next = solution.find(([a, b]) => present.has(a) && present.has(b))
+  if (next && freeIds.has(next[0]) && freeIds.has(next[1])) return next
+  return findPairs(tiles, freeIds)[0] ?? null
+}

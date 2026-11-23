@@ -13,11 +13,13 @@
  * by build order). Landing sounds/dust are fired by timers that match the
  * keyframe's impact point (LAND_AT). Any click during the intro skips it.
  * A canvas overlay renders particles; matched tiles sparkle on leave.
+ * Clearing the board starts a 2D fireworks show on the same canvas (the
+ * WebGL board has its own, in 3D); it loops slowly until the next deal.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Tile } from '../game/deal'
 import { ParticleLayer } from '../fx/particles'
-import { playClack, playHonk, playMatch, playPick } from '../fx/sound'
+import { playBurst, playClack, playHonk, playLaunch, playMatch, playPick } from '../fx/sound'
 import TileFace from './TileFace.vue'
 
 const props = defineProps<{
@@ -84,6 +86,7 @@ let ro: ResizeObserver | null = null
 
 onMounted(() => {
   particles = new ParticleLayer(canvas.value!)
+  particles.onBurst = (x, twinkle) => playBurst(panAt(x), 0.7, twinkle)
   ro = new ResizeObserver(([entry]) => {
     const { width, height } = entry.contentRect
     wrapSize.value = { w: width, h: height }
@@ -96,7 +99,57 @@ onBeforeUnmount(() => {
   ro?.disconnect()
   particles?.destroy()
   clearTimers()
+  stopShow()
 })
+
+// ---- victory fireworks ---------------------------------------------------------
+
+const SHOW_START_MS = 900 // after the last pair's crash
+const SHOW_BARRAGE_MS = [0, 450, 850, 1350, 1650, 2150, 2400, 2900, 3700, 3800, 3900, 4000]
+const SHOW_IDLE_MS: [number, number] = [1800, 3400]
+let showTimers: number[] = []
+/** Lights down for the show (a dark vignette), like the WebGL board's dusk. */
+const dusk = ref(false)
+
+function panAt(x: number) {
+  return (x / (wrap.value?.clientWidth || 1)) * 2 - 1
+}
+
+function launch() {
+  const w = wrapSize.value.w
+  const h = wrapSize.value.h
+  const x = w * (0.2 + Math.random() * 0.6)
+  particles?.firework(x, h * (0.42 + Math.random() * 0.3)) // below the victory title
+  playLaunch(panAt(x))
+}
+
+function startShow() {
+  stopShow()
+  if (reducedMotion) return
+  dusk.value = true
+  for (const t of SHOW_BARRAGE_MS) showTimers.push(window.setTimeout(launch, SHOW_START_MS + t))
+  const idle = (delay: number) =>
+    showTimers.push(
+      window.setTimeout(() => {
+        launch()
+        idle(SHOW_IDLE_MS[0] + Math.random() * (SHOW_IDLE_MS[1] - SHOW_IDLE_MS[0]))
+      }, delay),
+    )
+  idle(SHOW_START_MS + SHOW_BARRAGE_MS[SHOW_BARRAGE_MS.length - 1] + 2600)
+}
+
+function stopShow() {
+  dusk.value = false
+  showTimers.forEach(clearTimeout)
+  showTimers = []
+}
+
+watch(
+  () => props.tiles.length,
+  (n, old) => {
+    if (n === 0 && old > 0) startShow()
+  },
+)
 
 // ---- intro (drop-in deal) ----------------------------------------------------
 
@@ -112,6 +165,7 @@ function clearTimers() {
 }
 
 function onDeal() {
+  stopShow()
   fitView(props.tiles)
   spin.value = new Map(props.tiles.map((t) => [t.id, `${((Math.random() * 2 - 1) * MAX_SPIN).toFixed(2)}deg`]))
   startIntro()
@@ -181,18 +235,64 @@ function onTileClick(id: number, free: boolean) {
   else playHonk() // blocked tile: not pickable
 }
 
+// Matched pair: both tiles lift (scale up = closer to the viewer), back off a
+// little, then slam together; sparkle + sound on impact. Mirrors the WebGL
+// board's flight. The keyframes (`crash`) read --wx/--wy (wind-up) and
+// --cx/--cy (contact offset), set per tile once both of the pair are known.
+const CRASH_MS = 520
+const CRASH_IMPACT = 0.8 // keyframe fraction of the impact
+const WINDUP_PX = 14
+let leaving: HTMLElement[] = []
+
 function onLeave(el: Element) {
-  if (particles && wrap.value && !reducedMotion) {
-    const r = el.getBoundingClientRect()
-    const o = wrap.value.getBoundingClientRect()
-    particles.sparkle(r.left + r.width / 2 - o.left, r.top + r.height / 2 - o.top)
+  if (reducedMotion) return playMatch()
+  leaving.push(el as HTMLElement)
+  // both tiles of a pair leave in the same flush; pair them up after it
+  if (leaving.length === 1) queueMicrotask(launchLeaving)
+}
+
+function launchLeaving() {
+  const els = leaving
+  leaving = []
+  for (let i = 0; i < els.length; i += 2) crash(els[i], els[i + 1])
+}
+
+function crash(a: HTMLElement, b: HTMLElement | undefined) {
+  // board-local px (offsetLeft/Top ignore the board's scale and tilt, like the keyframes)
+  const ax = a.offsetLeft + W / 2
+  const ay = a.offsetTop + H / 2
+  const bx = b ? b.offsetLeft + W / 2 : ax
+  const by = b ? b.offsetTop + H / 2 : ay
+  const len = Math.hypot(bx - ax, by - ay) || 1
+  const dx = (bx - ax) / len
+  const dy = (by - ay) / len
+  const reach = Math.abs(dx) * (W / 2) + Math.abs(dy) * (H / 2) + 1 // half extent along the line
+  const mx = (ax + bx) / 2
+  const my = (ay + by) / 2
+  for (const [el, x, y, s] of [[a, ax, ay, 1], [b, bx, by, -1]] as const) {
+    if (!el) continue
+    const cx = b ? mx - s * dx * reach - x : 0
+    const cy = b ? my - s * dy * reach - y : 0
+    el.style.setProperty('--wx', `${b ? -s * dx * WINDUP_PX : 0}px`)
+    el.style.setProperty('--wy', `${b ? -s * dy * WINDUP_PX : 0}px`)
+    el.style.setProperty('--cx', `${cx}px`)
+    el.style.setProperty('--cy', `${cy}px`)
+    el.style.zIndex = '200000' // fly above everything
   }
-  playMatch() // called per tile; plays once per pair
+  window.setTimeout(() => {
+    if (particles && wrap.value) {
+      const r = a.getBoundingClientRect()
+      const o = wrap.value.getBoundingClientRect()
+      const ex = b ? (r.left + r.width / 2 + (b.getBoundingClientRect().left + r.width / 2)) / 2 : r.left + r.width / 2
+      particles.sparkle(ex - o.left, r.top + r.height / 2 - o.top)
+    }
+    playMatch()
+  }, CRASH_MS * CRASH_IMPACT)
 }
 </script>
 
 <template>
-  <div ref="wrap" class="board-wrap" @click.capture="onClickCapture">
+  <div ref="wrap" class="board-wrap" :class="{ dusk }" @click.capture="onClickCapture">
     <div
       class="board"
       :style="{
@@ -235,6 +335,17 @@ function onLeave(el: Element) {
   top: 50%;
   transform-origin: 50% 50%;
 }
+.board-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* fades out before the edges: the wrap is inset from the table, a hard dark box would show */
+  background: radial-gradient(ellipse at 50% 55%, rgba(0, 14, 7, 0.62) 40%, rgba(0, 14, 7, 0) 72%);
+  opacity: 0;
+  transition: opacity 1.2s ease;
+  pointer-events: none;
+}
+.board-wrap.dusk::before { opacity: 1; }
 .fx {
   position: absolute;
   inset: 0;
@@ -306,15 +417,20 @@ function onLeave(el: Element) {
   50% { transform: translateY(-3px) rotate(var(--rz)); }
 }
 
-/* Matched pair: lift and fade. */
-/* animation: none — the infinite selection pulse would otherwise make Vue
-   wait for it and keep the leaving element in the DOM. */
-.tile.tile-leave-active { animation: none; transition: transform 320ms ease-out, opacity 320ms ease-out; }
-.tile-leave-to { opacity: 0; transform: translateY(-28px) rotate(var(--rz)) scale(1.12); }
+/* Matched pair: fly up, back off, slam together (offsets set in crash()), burst.
+   The leave animation replaces the infinite selection pulse, which would
+   otherwise make Vue wait for it and keep the element in the DOM. */
+.tile.tile-leave-active { animation: crash 520ms linear both; }
+@keyframes crash {
+  0% { transform: translate(0, 0) scale(1) rotate(var(--rz)); animation-timing-function: cubic-bezier(0.2, 0.7, 0.3, 1); }
+  45% { transform: translate(var(--wx), calc(var(--wy) - 34px)) scale(1.22) rotate(0deg); animation-timing-function: cubic-bezier(0.6, 0, 1, 0.6); }
+  80% { opacity: 1; transform: translate(var(--cx), calc(var(--cy) - 30px)) scale(1.2) rotate(0deg); }
+  100% { opacity: 0; transform: translate(var(--cx), calc(var(--cy) - 34px)) scale(1.32) rotate(0deg); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .tile.hint { animation: none; transform: translateY(-16px) rotate(var(--rz)); }
   .tile.selected { animation: none; }
-  .tile-leave-active { transition: none; }
+  .tile.tile-leave-active { animation: none; }
 }
 </style>

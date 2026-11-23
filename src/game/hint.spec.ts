@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Tile } from './deal'
-import { findPairs, randomHint, type Pair } from './hint'
+import { findPairs, randomHint, solverPair, type Pair } from './hint'
 
 const tile = (id: number, suit: Tile['face']['suit'], rank: number): Tile => ({
   id,
@@ -39,5 +39,19 @@ describe('randomHint', () => {
   it('repeats when it is the only pair, and returns null when there is none', () => {
     expect(randomHint([[0, 1]], [0, 1])).toEqual([0, 1])
     expect(randomHint([], null)).toBeNull()
+  })
+})
+
+describe('solverPair', () => {
+  it('follows the solution when its next pair is free', () => {
+    const tiles = [tile(0, 'dots', 1), tile(1, 'dots', 1), tile(2, 'bamboo', 2), tile(3, 'bamboo', 2)]
+    const free = new Set([0, 1, 2, 3])
+    expect(solverPair(tiles, free, [[2, 3], [0, 1]])).toEqual([2, 3])
+  })
+
+  it('skips solution pairs already removed and falls back when the next one is blocked', () => {
+    const tiles = [tile(0, 'dots', 1), tile(1, 'dots', 1), tile(2, 'bamboo', 2), tile(3, 'bamboo', 2)]
+    expect(solverPair(tiles, new Set([0, 1, 2]), [[4, 5], [2, 3], [0, 1]])).toEqual([0, 1])
+    expect(solverPair(tiles, new Set([0, 2]), [[2, 3]])).toBeNull()
   })
 })

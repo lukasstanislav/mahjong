@@ -4,6 +4,8 @@ import type { Tile } from '../game/deal'
 import type { Surface } from '../fx/sound'
 import { SelectionFx, type SelectionTarget } from './SelectionFx'
 import { Debris } from './Debris'
+import { Fireworks } from './Fireworks'
+import { matchKey } from '../game/tiles'
 import { CELL_UV, FACE_ASPECT, IVORY, cellIndex, cellOffset, createAtlas } from './atlas'
 
 /**
@@ -41,6 +43,18 @@ const DROP = 0.42
 const LAND_AT = 0.6
 const DROP_H = 4.5
 const LEAVE = 0.45 // matched tile dissolve duration
+
+// Matched pair: both tiles fly up FLY_LIFT, lean back and turn their long sides
+// to face each other (wind-up), then slam together; the dissolve starts on impact.
+const FLY_LIFT = 4 * TH // "four storeys" above the higher of the two
+const FLY_CLEAR = 0.6 * TH // minimum clearance over any stack between them
+const FLY_RISE = 0.3 // s, ease-out climb + wind-up
+const FLY_OVERSHOOT = 0.18 // the climb peaks this far above the meeting height
+const FLY_WINDUP = 0.35 // world units each tile backs away from the other while rising
+const FLY_SLAM: [number, number] = [0.13, 0.3] // s, accelerating dash; longer for distant pairs
+const FLY_SLAM_PER_UNIT = 0.012 // s of slam per world unit of distance
+const FLY_LEAN_BACK = 0.3 // rad, tops tilt away during the wind-up
+const FLY_LEAN_IN = 0.12 // rad, tops tilt toward each other at impact
 
 // Dissolve field, shared by the shader and the debris release timing:
 // f = FIELD_NOISE * noise + FIELD_HEIGHT * (1 - y/TH)  → the top crumbles first.
@@ -85,6 +99,11 @@ const HINT_BOB = 0.09 // bob amplitude
 const HINT_SPEED = 3.2 // rad/s
 const HINT_EASE = 7 // 1/s, ease in/out of the lift
 const FIT_FILL = 1.15 // fraction of the viewport the board may use (headroom for tilt + lift)
+// victory: fireworks start this long after the last pair finished dissolving
+const CELEBRATE_DELAY = 0.25
+const CLICK_BURST_Y = 4.4 // height of a shell launched by clicking the empty table
+const DUSK_SUN = 0.22 // key light multiplier at full dusk (fireworks glow on a dark cloth)
+const DUSK_AMBIENT = 0.35 // hemisphere multiplier at full dusk
 
 export interface BoardCallbacks {
   /** Tile hit the surface (intro). Screen coords in CSS px of the canvas. */
@@ -94,6 +113,9 @@ export interface BoardCallbacks {
   onHover?: (id: number | null) => void
   /** All tiles are on the table: intro finished, skipped, or not played (reduced motion). Once per deal. */
   onReady?: () => void
+  /** Victory fireworks: a shell launched / burst. `x` = screen x in CSS px. */
+  onLaunch?: (x: number) => void
+  onBurst?: (x: number, size: number, crackle: boolean) => void
 }
 
 export interface BoardState {
@@ -116,6 +138,23 @@ interface TileRt {
   leaveStart: number // NaN = not leaving
   hidden: boolean // matrix collapsed (removed)
   hintAmt: number // 0..1, eased toward 1 while the tile is part of the Help pair
+  fly: Flight | null // matched: flying to the crash, then dissolving at the contact point
+}
+
+/** Path of one matched tile toward its partner (table-local). */
+interface Flight {
+  start: number
+  rise: number
+  slam: number
+  from: THREE.Vector3
+  apex: THREE.Vector3
+  contact: THREE.Vector3
+  impact: THREE.Vector3 // shared contact point of the pair; crumbs spray away from it
+  yaw0: number
+  yaw1: number
+  side: number // +1/-1: which local X edge faces the partner (sign of the lean)
+  gold: boolean
+  crashed: boolean
 }
 
 export class BoardRenderer {
@@ -134,11 +173,13 @@ export class BoardRenderer {
   private aState: THREE.InstancedBufferAttribute
   private aDissolve: THREE.InstancedBufferAttribute
   private debris: Debris
+  private fireworks: Fireworks
   private camLocal = new THREE.Vector3()
   /** Heightfield of present tile tops over the board (table-local), for crumbs to land on. */
   private hf = { x0: 0, z0: 0, nx: 0, nz: 0, h: new Float32Array(0) }
   private disposables: Array<{ dispose(): void }> = []
   private key!: THREE.SpotLight
+  private hemi!: THREE.HemisphereLight
   private palm: THREE.Texture | null = null
   private keyDir = new THREE.Vector3()
   private keyUp0 = new THREE.Vector3()
@@ -240,6 +281,15 @@ export class BoardRenderer {
 
     this.disposables.push(back, body, face, pick, backMat, bodyMat, faceMat, atlas, faceHeight, this.pickMesh.material as THREE.Material)
 
+    this.fireworks = new Fireworks()
+    this.fireworks.groundAt = this.groundAt
+    this.fireworks.hooks = {
+      onLaunch: (x) => this.cb.onLaunch?.(this.screenX(x)),
+      onBurst: (x, size, crackle) => this.cb.onBurst?.(this.screenX(x), size, crackle),
+    }
+    this.table.add(this.fireworks.group, this.fireworks.light)
+    this.disposables.push(this.fireworks)
+
     this.selFx = new SelectionFx({ w: TW, d: TD, h: TH, radius: RADIUS }, reducedMotion)
     this.table.add(this.selFx.group)
     this.disposables.push(this.selFx)
@@ -277,6 +327,7 @@ export class BoardRenderer {
         landed: !animate,
         leaveStart: NaN,
         hidden: false,
+        fly: null,
         hintAmt: 0,
       })
     }
@@ -285,6 +336,7 @@ export class BoardRenderer {
     ;(this.aDissolve.array as Float32Array).fill(0)
     this.aDissolve.needsUpdate = true
     this.debris.clear()
+    this.fireworks.clear()
     for (const m of this.meshes) m.count = tiles.length
     this.introEnd = animate ? now + 0.05 + order.length * STAGGER + DROP : 0
     this.readyPending = true
@@ -299,21 +351,21 @@ export class BoardRenderer {
     const present = new Set(state.tiles.map((t) => t.id))
     let removed = false
     const now = this.timer.getElapsed()
+    // the board is being cleared right now: last pair goes out in gold, then fireworks
+    const final = present.size === 0 && this.rt.some((r) => r.present)
+    const leaving: TileRt[] = []
     for (const r of this.rt) {
       if (r.present && !present.has(r.tile.id)) {
         r.present = false
         removed = true
         if (this.reducedMotion) this.hide(r)
-        else {
-          r.leaveStart = now
-          this.updateCamLocal()
-          this.debris.spawn(r.base, r.spin, now, LEAVE / OVERSHOOT, this.camLocal, dissolveField)
-          const p = this.screenOf(r, TH)
-          this.cb.onLeave?.(p.x, p.y)
-        }
+        else leaving.push(r)
       }
     }
-    if (removed) this.rebuildHeightfield() // matched tiles no longer support crumbs
+    if (removed) this.rebuildHeightfield() // matched tiles no longer support crumbs (nor block flights)
+    let crashAt = 0
+    for (const [a, b] of pairUp(leaving)) crashAt = Math.max(crashAt, this.launchPair(a, b, now, final))
+    if (final && !this.reducedMotion) this.fireworks.start(now + crashAt + LEAVE + CELEBRATE_DELAY, this.boardBounds())
     if (this.hovered !== null && !present.has(this.hovered)) this.setHovered(null)
     this.writeStates()
     this.dirty = true
@@ -330,6 +382,116 @@ export class BoardRenderer {
     }
     this.introEnd = 0
     this.dirty = true
+  }
+
+  /**
+   * Start the flight of a matched pair (b = null: a lone tile just rises and
+   * breaks). Returns seconds until impact.
+   */
+  private launchPair(a: TileRt, b: TileRt | null, now: number, gold: boolean): number {
+    const dir = new THREE.Vector3(1, 0, 0)
+    if (b) {
+      dir.set(b.base.x - a.base.x, 0, b.base.z - a.base.z)
+      if (dir.lengthSq() < 1e-6) dir.set(1, 0, 0)
+      dir.normalize()
+    }
+    const dist = b ? Math.hypot(b.base.x - a.base.x, b.base.z - a.base.z) : 0
+    const mid = b ? a.base.clone().add(b.base).multiplyScalar(0.5) : a.base.clone()
+    // meet four storeys up, and always clear of any stack between them
+    let meetY = Math.max(a.base.y, b?.base.y ?? 0) + FLY_LIFT
+    for (let i = 0; i <= 16 && b; i++) {
+      const u = i / 16
+      const g = this.groundAt(a.base.x + (b.base.x - a.base.x) * u, a.base.z + (b.base.z - a.base.z) * u)
+      meetY = Math.max(meetY, g + FLY_CLEAR)
+    }
+    mid.y = meetY
+    // turn so the local X axis (the long side's normal) lies on the line between them;
+    // keep the yaw within ±90° so neither tile spins round
+    let yaw1 = Math.atan2(-dir.z, dir.x)
+    if (yaw1 > Math.PI / 2) yaw1 -= Math.PI
+    if (yaw1 < -Math.PI / 2) yaw1 += Math.PI
+    const localX = new THREE.Vector3(Math.cos(yaw1), 0, -Math.sin(yaw1))
+    const slam = THREE.MathUtils.clamp(FLY_SLAM[0] + dist * FLY_SLAM_PER_UNIT, FLY_SLAM[0], FLY_SLAM[1])
+    // half-width plus the lean-in, so the tilted tops just touch instead of overlapping
+    const reach = TW / 2 + TH * Math.sin(FLY_LEAN_IN) + 0.005
+
+    const make = (r: TileRt, toward: THREE.Vector3): Flight => {
+      const from = r.base.clone()
+      if (this.state.selectedId === r.tile.id || r.hintAmt > 0) from.y += 0.1 // it was lifted
+      const apex = from.clone().addScaledVector(toward, b ? -FLY_WINDUP : 0)
+      apex.y = meetY + FLY_OVERSHOOT
+      const contact = b ? mid.clone().addScaledVector(toward, -reach) : from.clone().setY(meetY)
+      return {
+        start: now,
+        rise: FLY_RISE,
+        slam: b ? slam : 0.05,
+        from,
+        apex,
+        contact,
+        impact: b ? mid.clone().setY(meetY + TH / 2) : contact.clone().setY(meetY + TH / 2),
+        yaw0: r.spin,
+        yaw1: b ? yaw1 : r.spin,
+        side: b ? Math.sign(localX.dot(toward)) || 1 : 0,
+        gold,
+        crashed: false,
+      }
+    }
+    a.fly = make(a, dir)
+    if (b) b.fly = make(b, dir.clone().negate())
+    return a.fly.rise + a.fly.slam
+  }
+
+  /** Pose of a flying tile at `now`: writes the position into `out`, returns yaw and lean. */
+  private flightPose(f: Flight, now: number, out: THREE.Vector3): { yaw: number; rz: number } {
+    const t = now - f.start
+    if (t < f.rise) {
+      const u = t / f.rise
+      const e = 1 - (1 - u) ** 3
+      // climb leads, the backing-off follows
+      out.set(
+        THREE.MathUtils.lerp(f.from.x, f.apex.x, u * u),
+        THREE.MathUtils.lerp(f.from.y, f.apex.y, e),
+        THREE.MathUtils.lerp(f.from.z, f.apex.z, u * u),
+      )
+      return { yaw: THREE.MathUtils.lerp(f.yaw0, f.yaw1, e), rz: f.side * FLY_LEAN_BACK * e }
+    }
+    if (t < f.rise + f.slam) {
+      const u = (t - f.rise) / f.slam
+      const e = u * u * u // accelerate into the hit
+      out.lerpVectors(f.apex, f.contact, e)
+      return { yaw: f.yaw1, rz: f.side * THREE.MathUtils.lerp(FLY_LEAN_BACK, -FLY_LEAN_IN, e) }
+    }
+    out.copy(f.contact)
+    return { yaw: f.yaw1, rz: -f.side * FLY_LEAN_IN }
+  }
+
+  /** Impact: the tile starts dissolving where it is and breaks into crumbs. */
+  private crash(r: TileRt, now: number) {
+    const f = r.fly!
+    f.crashed = true
+    r.leaveStart = now
+    this.updateCamLocal()
+    this.debris.spawn(f.contact, f.yaw1, now, LEAVE / OVERSHOOT, this.camLocal, dissolveField, f.gold, f.impact)
+    this.table.updateMatrixWorld()
+    const p = this.table.localToWorld(this.tmpV.copy(f.impact)).project(this.camera)
+    this.cb.onLeave?.(((p.x + 1) / 2) * this.width, ((1 - p.y) / 2) * this.height)
+  }
+
+  /** Victory fireworks are scheduled or in the air. */
+  get celebrating() {
+    return this.fireworks.active
+  }
+
+  /** During the celebration: a shell that bursts right under the NDC point. */
+  launchAt(ndc: { x: number; y: number }) {
+    if (this.reducedMotion) return
+    this.table.updateMatrixWorld()
+    this.raycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.camera)
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -CLICK_BURST_Y).applyMatrix4(this.table.matrixWorld)
+    const hit = this.raycaster.ray.intersectPlane(plane, new THREE.Vector3())
+    if (!hit) return
+    this.table.worldToLocal(hit)
+    this.fireworks.launchAt(this.timer.getElapsed(), hit.x, hit.z)
   }
 
   /** Pointer in NDC (-1..1, y up), or null when it leaves the canvas. */
@@ -369,7 +531,8 @@ export class BoardRenderer {
   // ---- scene setup -----------------------------------------------------------
 
   private buildLights() {
-    this.scene.add(new THREE.HemisphereLight('#fff4dc', '#0b2a18', AMBIENT))
+    this.hemi = new THREE.HemisphereLight('#fff4dc', '#0b2a18', AMBIENT)
+    this.scene.add(this.hemi)
     // Key: a soft-edged lamp above the table. The penumbra falloff is the vignette.
     const key = new THREE.SpotLight(SUN_COLOR, SUN_INTENSITY, 0, 0.62, 0.85, 0)
     key.position.set(-4, 19, 9)
@@ -540,13 +703,17 @@ export class BoardRenderer {
     const selFxActive = this.selFx.update(dt, now, this.selTarget)
     this.updateCamLocal()
     const debrisActive = this.debris.update(dt, now, this.camLocal)
+    const fireworksActive = this.fireworks.update(dt, now)
+    const dusk = this.fireworks.dusk
+    this.key.intensity = SUN_INTENSITY * (1 - (1 - DUSK_SUN) * dusk)
+    this.hemi.intensity = AMBIENT * (1 - (1 - DUSK_AMBIENT) * dusk)
     if (this.readyPending && !this.introRunning) {
       this.readyPending = false
       this.cb.onReady?.()
     }
     const swaying = this.palm !== null && !this.reducedMotion
     if (swaying) this.swayPalm(now)
-    if (this.dirty || animating || tilting || swaying || selFxActive || debrisActive) {
+    if (this.dirty || animating || tilting || swaying || selFxActive || debrisActive || fireworksActive) {
       this.dirty = false
       this.renderer.render(this.scene, this.camera)
     }
@@ -562,6 +729,31 @@ export class BoardRenderer {
     for (const r of this.rt) {
       const id = r.tile.id
       if (r.hidden) continue
+
+      if (r.fly) {
+        animating = true
+        const f = r.fly
+        if (!f.crashed && now >= f.start + f.rise + f.slam) this.crash(r, now)
+        if (!Number.isNaN(r.leaveStart)) {
+          const t = (now - r.leaveStart) / LEAVE
+          if (t >= 1) {
+            r.leaveStart = NaN
+            r.fly = null
+            this.hide(r)
+            this.aDissolve.setX(id, 0)
+            this.aDissolve.needsUpdate = true
+            continue
+          }
+          this.aDissolve.setX(id, t * OVERSHOOT)
+          this.aDissolve.needsUpdate = true
+        }
+        const pose = this.flightPose(f, now, this.tmpV)
+        this.tmpE.set(0, pose.yaw, pose.rz)
+        this.tmpQ.setFromEuler(this.tmpE)
+        this.tmpM.compose(this.tmpV, this.tmpQ, this.tmpS.setScalar(1))
+        for (const m of this.meshes) m.setMatrixAt(id, this.tmpM)
+        continue
+      }
 
       let y = 0
       let rx = 0
@@ -597,21 +789,7 @@ export class BoardRenderer {
         }
       }
 
-      if (!Number.isNaN(r.leaveStart)) {
-        const t = (now - r.leaveStart) / LEAVE
-        if (t >= 1) {
-          r.leaveStart = NaN
-          this.hide(r)
-          this.aDissolve.setX(id, 0)
-          this.aDissolve.needsUpdate = true
-          animating = true // one more frame to show the removal
-          continue
-        }
-        animating = true
-        this.aDissolve.setX(id, t * OVERSHOOT)
-        this.aDissolve.needsUpdate = true
-        y += 0.04 * t // the crumbling tile lifts a hair as it breaks
-      } else if (id === sel && r.present && !this.reducedMotion) {
+      if (id === sel && r.present && !this.reducedMotion) {
         y += 0.1 + 0.03 * Math.sin(now * 5.5) // lifted + gentle bob
         animating = true
       }
@@ -813,11 +991,49 @@ export class BoardRenderer {
     return { x: ((p.x + 1) / 2) * this.width, y: ((1 - p.y) / 2) * this.height }
   }
 
+  /** Screen x (CSS px) of a table-local x, at mid burst height. For stereo pan. */
+  private screenX(x: number) {
+    this.table.updateMatrixWorld()
+    const p = this.table.localToWorld(this.tmpV.set(x, 3, 0)).project(this.camera)
+    return ((p.x + 1) / 2) * this.width
+  }
+
+  /** Table-local extents of the dealt layout (all tiles, present or not). */
+  private boardBounds() {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
+    for (const r of this.rt) {
+      minX = Math.min(minX, r.base.x - TW / 2)
+      maxX = Math.max(maxX, r.base.x + TW / 2)
+      minZ = Math.min(minZ, r.base.z - TD / 2)
+      maxZ = Math.max(maxZ, r.base.z + TD / 2)
+    }
+    return { minX, maxX, minZ, maxZ }
+  }
+
   private screenWidth(r: TileRt) {
     const a = this.table.localToWorld(r.base.clone().setX(r.base.x - TW / 2)).project(this.camera)
     const b = this.table.localToWorld(r.base.clone().setX(r.base.x + TW / 2)).project(this.camera)
     return (Math.abs(b.x - a.x) / 2) * this.width
   }
+}
+
+/**
+ * Group removed tiles into matched pairs (by match key, in order); an
+ * unmatched leftover gets a null partner. A normal match removes exactly one pair.
+ */
+function pairUp(tiles: TileRt[]): Array<[TileRt, TileRt | null]> {
+  const open = new Map<string, TileRt>()
+  const out: Array<[TileRt, TileRt | null]> = []
+  for (const r of tiles) {
+    const k = matchKey(r.tile.face)
+    const other = open.get(k)
+    if (other) {
+      out.push([other, r])
+      open.delete(k)
+    } else open.set(k, r)
+  }
+  for (const r of open.values()) out.push([r, null])
+  return out
 }
 
 /**
