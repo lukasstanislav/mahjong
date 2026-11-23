@@ -5,7 +5,7 @@ import GameBoard from './components/GameBoard.vue'
 const GameBoard3D = defineAsyncComponent(() => import('./components/GameBoard3D.vue'))
 import NameForm from './components/NameForm.vue'
 import { useGame } from './game/useGame'
-import { DEFAULT_LAYOUT, LAYOUTS } from './game/layouts'
+import { DEFAULT_LAYOUT, DEFAULT_TALL_LAYOUT, LAYOUTS } from './game/layouts'
 import { playFanfare, setMuted, unlockAudio } from './fx/sound'
 import { setAmbienceEnabled, startAmbience } from './fx/ambience'
 
@@ -148,11 +148,21 @@ function toggleAmbience() {
 layoutId.value = (() => {
   try {
     const id = localStorage.getItem(LAYOUT_KEY)
-    return LAYOUTS.some((l) => l.id === id) ? id! : DEFAULT_LAYOUT
+    return LAYOUTS.some((l) => l.id === id) ? id! : defaultLayout()
   } catch {
-    return DEFAULT_LAYOUT
+    return defaultLayout()
   }
 })()
+
+/** No saved choice yet: a tall layout on a portrait screen (phones), the classic Turtle otherwise. */
+function defaultLayout() {
+  return window.innerHeight > window.innerWidth ? DEFAULT_TALL_LAYOUT : DEFAULT_LAYOUT
+}
+
+const LAYOUT_GROUPS = [
+  { label: 'Wide screens', layouts: LAYOUTS.filter((l) => l.shape === 'wide') },
+  { label: 'Tall screens (phones)', layouts: LAYOUTS.filter((l) => l.shape === 'tall') },
+]
 
 function changeLayout() {
   try {
@@ -194,7 +204,9 @@ function start(name: string) {
       <label class="toggle">
         Layout
         <select v-model="layoutId" @change="changeLayout">
-          <option v-for="l in LAYOUTS" :key="l.id" :value="l.id">{{ l.name }}</option>
+          <optgroup v-for="g in LAYOUT_GROUPS" :key="g.label" :label="g.label">
+            <option v-for="l in g.layouts" :key="l.id" :value="l.id">{{ l.name }}</option>
+          </optgroup>
         </select>
       </label>
       <span>Tiles: {{ tiles.length }}</span>

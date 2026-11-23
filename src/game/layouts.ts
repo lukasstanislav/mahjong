@@ -11,6 +11,12 @@ import { turtleLayout, type Position } from './layout'
 export interface LayoutDef {
   id: string
   name: string
+  /**
+   * 'wide' layouts suit landscape screens. 'tall' ones are drawn for phones in
+   * portrait: at most ~7 columns × 10 rows, so tiles stay ~45 px wide (a
+   * comfortable tap target) on a 390 px screen. The classic shapes are all wide.
+   */
+  shape: 'wide' | 'tall'
   positions: Position[]
 }
 
@@ -25,6 +31,61 @@ class Builder {
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) this.tile(x + i, y + j, z)
     return this
   }
+  /**
+   * Symmetric profile: `layers[z][row]` = width of a row centred on column `cx`
+   * (0 = empty). Rows may sit at half offsets via `y0`. Odd and even widths
+   * centre exactly on whole or half columns.
+   */
+  profile(cx: number, layers: number[][], y0 = 0) {
+    layers.forEach((rows, z) => rows.forEach((w, y) => w > 0 && this.rect(cx - (w - 1) / 2, y0 + y, w, 1, z)))
+    return this
+  }
+}
+
+// ---- tall (portrait) layouts ----------------------------------------------------
+
+/** Tower: a tall stepped pyramid, 7×10 → 5×8 → 3×6 → 1×4. Many tiles, few free at start. */
+function tower(): Position[] {
+  return new Builder().rect(0, 0, 7, 10, 0).rect(1, 1, 5, 8, 1).rect(2, 2, 3, 6, 2).rect(3, 3, 1, 4, 3).p
+}
+
+/** Lantern: a rounded paper lantern with a cap and a tassel, domed in four layers. */
+function lantern(): Position[] {
+  return new Builder().profile(3, [
+    [1, 5, 7, 7, 7, 7, 7, 7, 5, 1],
+    [0, 3, 5, 5, 5, 5, 5, 5, 3, 0],
+    [0, 0, 3, 3, 3, 3, 3, 3, 0, 0],
+    [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+  ]).p
+}
+
+/** Hourglass: two stepped bulbs joined by a single-tile waist (the waist tiles are free early). */
+function hourglass(): Position[] {
+  return new Builder().profile(3, [
+    [7, 7, 5, 3, 1, 1, 3, 5, 7, 7],
+    [5, 5, 3, 1, 0, 0, 1, 3, 5, 5],
+    [3, 3, 1, 0, 0, 0, 0, 1, 3, 3],
+    [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+  ]).p
+}
+
+/** Pagoda: three widening roofs over a base, each roof ridged a layer up on half rows, and a spire. */
+function pagoda(): Position[] {
+  const b = new Builder()
+  b.tile(3, 0, 0).tile(3, 0, 1) // spire
+  // [first row, width, rows] per storey; the ridge sits half a row down, one layer up
+  const storeys: Array<[number, number, number]> = [[1, 3, 2], [3, 5, 2], [5, 7, 2], [7, 5, 3]]
+  for (const [y, w, rows] of storeys) {
+    b.rect(3 - (w - 1) / 2, y, w, rows, 0)
+    b.rect(3 - (w - 3) / 2, y + 0.5, w - 2, rows - 1, 1)
+    if (w >= 5) b.rect(3 - (w - 5) / 2, y + 0.5, w - 4, rows - 1, 2)
+  }
+  return b.p
+}
+
+/** Turtle turned on its side (rows ↔ columns): the classic 144 for a tall screen. Tiles come out small on phones. */
+function tallTurtle(): Position[] {
+  return turtleLayout().map((p) => ({ x: p.y, y: p.x, z: p.z }))
 }
 
 /** Square stepped pyramid: 10×8, 8×6, 4×4. Deep stacks keep most tiles covered (hard). */
@@ -89,14 +150,21 @@ function spider(): Position[] {
 }
 
 export const LAYOUTS: LayoutDef[] = [
-  { id: 'turtle', name: 'Turtle', positions: turtleLayout() },
-  { id: 'dragon', name: 'Dragon', positions: dragon() },
-  { id: 'pyramid', name: 'Pyramid', positions: pyramid() },
-  { id: 'fortress', name: 'Fortress', positions: fortress() },
-  { id: 'spider', name: 'Spider', positions: spider() },
+  { id: 'turtle', name: 'Turtle', shape: 'wide', positions: turtleLayout() },
+  { id: 'dragon', name: 'Dragon', shape: 'wide', positions: dragon() },
+  { id: 'pyramid', name: 'Pyramid', shape: 'wide', positions: pyramid() },
+  { id: 'fortress', name: 'Fortress', shape: 'wide', positions: fortress() },
+  { id: 'spider', name: 'Spider', shape: 'wide', positions: spider() },
+  { id: 'lantern', name: 'Lantern', shape: 'tall', positions: lantern() },
+  { id: 'pagoda', name: 'Pagoda', shape: 'tall', positions: pagoda() },
+  { id: 'hourglass', name: 'Hourglass', shape: 'tall', positions: hourglass() },
+  { id: 'tower', name: 'Tower', shape: 'tall', positions: tower() },
+  { id: 'turtle-tall', name: 'Turtle (tall)', shape: 'tall', positions: tallTurtle() },
 ]
 
 export const DEFAULT_LAYOUT = 'turtle'
+/** First-visit default on a portrait screen. */
+export const DEFAULT_TALL_LAYOUT = 'lantern'
 
 export function getLayout(id: string): LayoutDef {
   return LAYOUTS.find((l) => l.id === id) ?? LAYOUTS[0]
