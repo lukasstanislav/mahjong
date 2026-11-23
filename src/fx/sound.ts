@@ -107,6 +107,13 @@ export function unlockAudio() {
   try {
     if (!ctx) {
       ctx = new AudioContext()
+      // Hidden tab: suspend audio. Background timers are throttled, which would starve
+      // scheduled audio (ambience); nothing needs to play while the game isn't visible.
+      document.addEventListener('visibilitychange', () => {
+        if (!ctx) return
+        if (document.hidden) void ctx.suspend()
+        else void ctx.resume()
+      })
       master = ctx.createGain()
       master.gain.value = muted ? 0 : 0.7
       master.connect(ctx.destination)
@@ -132,6 +139,11 @@ export function unlockAudio() {
   } catch {
     ctx = null // Web Audio unavailable: stay silent
   }
+}
+
+/** The shared audio graph (after unlockAudio), for other audio modules such as ambience. */
+export function audioGraph(): { ctx: AudioContext; master: GainNode } | null {
+  return ctx && master ? { ctx, master } : null
 }
 
 export function setMuted(value: boolean) {

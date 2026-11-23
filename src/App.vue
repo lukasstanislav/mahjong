@@ -6,9 +6,11 @@ const GameBoard3D = defineAsyncComponent(() => import('./components/GameBoard3D.
 import NameForm from './components/NameForm.vue'
 import { useGame } from './game/useGame'
 import { setMuted, unlockAudio } from './fx/sound'
+import { setAmbienceEnabled, startAmbience } from './fx/ambience'
 
 const STORAGE_KEY = 'mahjong.playerName'
 const SOUND_KEY = 'mahjong.sound'
+const AMBIENCE_KEY = 'mahjong.ambience'
 
 function loadName(): string {
   try {
@@ -89,8 +91,29 @@ function leaveGame() {
   player.value = null
 }
 
+const ambience = ref(readFlag(AMBIENCE_KEY))
+setAmbienceEnabled(ambience.value)
+
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) !== 'off'
+  } catch {
+    return true
+  }
+}
+
+function toggleAmbience() {
+  setAmbienceEnabled(ambience.value)
+  try {
+    localStorage.setItem(AMBIENCE_KEY, ambience.value ? 'on' : 'off')
+  } catch {
+    /* ignore */
+  }
+}
+
 function deal() {
   unlockAudio() // must run inside a user gesture
+  void startAmbience() // idempotent: starts once, keeps playing across games
   boardReady = false
   window.clearTimeout(autoHelpTimer)
   newGame()
@@ -119,6 +142,7 @@ function start(name: string) {
       <span>Moves available: {{ availablePairs }}</span>
       <label class="toggle"><input v-model="showFree" type="checkbox" /> Show pickable</label>
       <label class="toggle"><input v-model="sound" type="checkbox" @change="toggleSound" /> Sound</label>
+      <label class="toggle"><input v-model="ambience" type="checkbox" @change="toggleAmbience" /> Ambience</label>
       <button :disabled="stuck || won" title="Highlight a possible match" @click="hint">Help</button>
       <button @click="deal">New game</button>
       <button class="ghost" @click="leaveGame">Change name</button>

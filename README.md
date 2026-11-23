@@ -24,6 +24,7 @@ Stuck? Press **Help** to make a possible pair float above the table. Each press 
 - **Swaying palm shadow** projected over the table and the tiles.
 - **Animated opening deal:** tiles drop one by one, with a clack and a puff of cloth dust as each lands. Matched pairs lift away in a burst of sparks.
 - **Sound:** recorded tile clacks, varied on every hit, plus pick, match and "blocked" cues, with a mute toggle.
+- **Ambience:** a stream, wind in the palms and distant jungle, with no audible loop (its own toggle).
 - **Solvable deals:** tiles are placed at random, but along a path that is known to clear the board.
 - **Fallback:** a lighter CSS board for browsers without WebGL2.
 - **Accessibility:** respects `prefers-reduced-motion` (no drop-in, particles, tilt or sway).
@@ -65,7 +66,7 @@ src/
   components/   Vue components: name form, 3D board shell, CSS fallback board
 public/
   tiles.svg           Tile face sprite
-  sounds/             Landing clacks, pick tap, match reward sounds
+  sounds/             Landing clacks, pick tap, match reward sounds, ambience
   palm-cookie.jpg     Palm shadow texture (1024² crop of assets-src/palm_shadows.jpg)
 ```
 
@@ -92,7 +93,7 @@ Keep game rules in `src/game/` with tests. Rendering code should only consume th
 | Asset | Source | Licence |
 |---|---|---|
 | `public/tiles.svg` (tile faces, unmodified) | [WarL0ckNet/tile-art](https://github.com/WarL0ckNet/tile-art) (`img/tiles.svg`, commit `8b8f2f9`). Vectorised from Martin Persson's raster tiles (martinpersson.org) per the upstream README | GPL-3.0, see [`licenses/tiles-svg-GPL-3.0.txt`](licenses/tiles-svg-GPL-3.0.txt) |
-| `public/sounds/clack-1.mp3`, `clack-2.mp3`, `tap.mp3`, `crumble-1.mp3`, `crumble-2.mp3` | Generated with [Sonilo](https://sonilo.com) | Sonilo terms; attribution required: **"Sound effects by Sonilo (sonilo.com)"** (shown in the game's start screen) |
+| `public/sounds/clack-1.mp3`, `clack-2.mp3`, `tap.mp3`, `crumble-1.mp3`, `crumble-2.mp3`, `ambience-1.mp3`, `ambience-2.mp3` | Generated with [Sonilo](https://sonilo.com) | Sonilo terms; attribution required: **"Sound effects by Sonilo (sonilo.com)"** (shown in the game's start screen) |
 | `assets-src/palm_shadows.jpg` (original), `public/palm-cookie.jpg` (cropped, resized) | Photo by [Augustine Wong](https://unsplash.com/@augustinewong) on [Unsplash](https://unsplash.com/photos/shadow-of-palm-fronds-cast-on-light-wall-T0BYurbDK_M) | [Unsplash License](https://unsplash.com/license) (attribution not required, given anyway) |
 
 Built with [Vue](https://vuejs.org/), [Vite](https://vite.dev/) and [three.js](https://threejs.org/).
