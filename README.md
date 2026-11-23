@@ -15,7 +15,7 @@ No account and no backend. Type a name and the tiles drop onto the table.
 - Flowers match any flower, and seasons match any season.
 - Clear all 144 tiles to win. **Every deal is guaranteed solvable.**
 
-Turn on *Show pickable* to dim the blocked tiles. Click during the opening deal to skip it.
+Stuck? Press **Help** to make a possible pair float above the table. Each press shows a different pair. Help also kicks in by itself 5 seconds after the tiles are laid, and after 30 seconds without a click. Turn on *Show pickable* to dim the blocked tiles. Click during the opening deal to skip it.
 
 ## Features
 
@@ -65,7 +65,7 @@ src/
   components/   Vue components: name form, 3D board shell, CSS fallback board
 public/
   tiles.svg           Tile face sprite
-  sounds/             Landing clacks and the pick tap
+  sounds/             Landing clacks, pick tap, match reward sounds
   palm-cookie.jpg     Palm shadow texture (1024² crop of assets-src/palm_shadows.jpg)
 ```
 
@@ -92,7 +92,7 @@ Keep game rules in `src/game/` with tests. Rendering code should only consume th
 | Asset | Source | Licence |
 |---|---|---|
 | `public/tiles.svg` (tile faces, unmodified) | [WarL0ckNet/tile-art](https://github.com/WarL0ckNet/tile-art) (`img/tiles.svg`, commit `8b8f2f9`). Vectorised from Martin Persson's raster tiles (martinpersson.org) per the upstream README | GPL-3.0, see [`licenses/tiles-svg-GPL-3.0.txt`](licenses/tiles-svg-GPL-3.0.txt) |
-| `public/sounds/clack-1.mp3`, `clack-2.mp3`, `tap.mp3` | Generated with [Sonilo](https://sonilo.com) | Sonilo terms; attribution required: **"Sound effects by Sonilo (sonilo.com)"** (shown in the game's start screen) |
+| `public/sounds/clack-1.mp3`, `clack-2.mp3`, `tap.mp3`, `crumble-1.mp3`, `crumble-2.mp3` | Generated with [Sonilo](https://sonilo.com) | Sonilo terms; attribution required: **"Sound effects by Sonilo (sonilo.com)"** (shown in the game's start screen) |
 | `assets-src/palm_shadows.jpg` (original), `public/palm-cookie.jpg` (cropped, resized) | Photo by [Augustine Wong](https://unsplash.com/@augustinewong) on [Unsplash](https://unsplash.com/photos/shadow-of-palm-fronds-cast-on-light-wall-T0BYurbDK_M) | [Unsplash License](https://unsplash.com/license) (attribution not required, given anyway) |
 
 Built with [Vue](https://vuejs.org/), [Vite](https://vite.dev/) and [three.js](https://threejs.org/).

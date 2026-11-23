@@ -17,7 +17,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Tile } from '../game/deal'
 import { ParticleLayer } from '../fx/particles'
-import { playChime, playClack, playHonk, playPick } from '../fx/sound'
+import { playClack, playHonk, playMatch, playPick } from '../fx/sound'
 import TileFace from './TileFace.vue'
 
 const props = defineProps<{
@@ -25,9 +25,10 @@ const props = defineProps<{
   dealId: number
   freeIds: Set<number>
   selectedId: number | null
+  hintIds: readonly [number, number] | null
   showFree: boolean
 }>()
-const emit = defineEmits<{ pick: [id: number] }>()
+const emit = defineEmits<{ pick: [id: number]; ready: [] }>()
 
 const W = 60 // face width
 const H = 80 // face height
@@ -54,7 +55,9 @@ const drawn = computed(() =>
     tile: t,
     left: t.pos.x * STEP_X - t.pos.z * LAYER_SHIFT - VIEW.x,
     top: t.pos.y * STEP_Y - t.pos.z * LAYER_SHIFT - VIEW.y,
-    zIndex: t.pos.z * 10000 + (t.pos.x + t.pos.y) * 100 + t.pos.x,
+    // hinted tiles float, so draw them above everything
+    zIndex: (props.hintIds?.includes(t.id) ? 100000 : 0) + t.pos.z * 10000 + (t.pos.x + t.pos.y) * 100 + t.pos.x,
+    hint: props.hintIds ? props.hintIds.indexOf(t.id) : -1,
     free: props.freeIds.has(t.id),
     selected: props.selectedId === t.id,
   })),
@@ -106,6 +109,7 @@ function startIntro() {
   clearTimers()
   if (reducedMotion || props.tiles.length === 0) {
     intro.value = false
+    if (props.tiles.length) emit('ready')
     return
   }
   // Build order: bottom layer first, then rows top→bottom, left→right.
@@ -122,7 +126,12 @@ function startIntro() {
   })
   dropStyle.value = styles
   intro.value = true
-  timers.push(window.setTimeout(() => (intro.value = false), order.length * STAGGER_MS + DROP_MS + 50))
+  timers.push(
+    window.setTimeout(() => {
+      intro.value = false
+      emit('ready')
+    }, order.length * STAGGER_MS + DROP_MS + 50),
+  )
 }
 
 function land(t: Tile) {
@@ -137,7 +146,9 @@ function land(t: Tile) {
 
 function skipIntro() {
   clearTimers()
+  const wasRunning = intro.value
   intro.value = false
+  if (wasRunning) emit('ready')
 }
 
 watch(() => props.dealId, onDeal, { immediate: true })
@@ -158,16 +169,13 @@ function onTileClick(id: number, free: boolean) {
   else playHonk() // blocked tile: not pickable
 }
 
-let lastChime = 0
 function onLeave(el: Element) {
   if (particles && wrap.value && !reducedMotion) {
     const r = el.getBoundingClientRect()
     const o = wrap.value.getBoundingClientRect()
     particles.sparkle(r.left + r.width / 2 - o.left, r.top + r.height / 2 - o.top)
   }
-  const now = performance.now()
-  if (now - lastChime > 80) playChime()
-  lastChime = now
+  playMatch() // called per tile; plays once per pair
 }
 </script>
 
@@ -187,7 +195,7 @@ function onLeave(el: Element) {
           :key="d.tile.id"
           :data-id="d.tile.id"
           class="tile"
-          :class="{ free: d.free, selected: d.selected, dim: showFree && !d.free, dropping: intro }"
+          :class="{ free: d.free, selected: d.selected, dim: showFree && !d.free, dropping: intro, hint: d.hint >= 0, 'hint-b': d.hint === 1 }"
           :style="{ left: `${d.left}px`, top: `${d.top}px`, zIndex: d.zIndex, '--rz': spin.get(d.tile.id), ...dropStyle.get(d.tile.id) }"
           @click="onTileClick(d.tile.id, d.free)"
         >
@@ -275,6 +283,13 @@ function onLeave(el: Element) {
   78% { transform: translate(0, -6px) rotate(var(--rz)) rotate(calc(var(--rot) * 0.15)); }
   100% { transform: rotate(var(--rz)); }
 }
+/* Help: float up and bob; the second tile is out of phase */
+.tile.hint { animation: hint 1.9s ease-in-out infinite; }
+.tile.hint-b { animation-delay: -0.65s; }
+@keyframes hint {
+  0%, 100% { transform: translateY(-16px) rotate(var(--rz)); }
+  50% { transform: translateY(-22px) rotate(calc(var(--rz) + 1.5deg)); }
+}
 @keyframes pulse {
   50% { transform: translateY(-3px) rotate(var(--rz)); }
 }
@@ -286,6 +301,7 @@ function onLeave(el: Element) {
 .tile-leave-to { opacity: 0; transform: translateY(-28px) rotate(var(--rz)) scale(1.12); }
 
 @media (prefers-reduced-motion: reduce) {
+  .tile.hint { animation: none; transform: translateY(-16px) rotate(var(--rz)); }
   .tile.selected { animation: none; }
   .tile-leave-active { transition: none; }
 }

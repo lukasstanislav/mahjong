@@ -76,6 +76,11 @@ const PALM_RES = 256 // processing/texture size; downscaling doubles as blur (so
 const SWAY_ROLL = THREE.MathUtils.degToRad(1.4) // max rotation of the shadow pattern
 const SWAY_SHIFT = 0.012 // max translation, fraction of the light cone
 const SWAY_SPEED = 1 // 1 = gentle breeze
+// Help hint: the pair floats up and bobs
+const HINT_LIFT = 0.45 // world units above its rest position
+const HINT_BOB = 0.09 // bob amplitude
+const HINT_SPEED = 3.2 // rad/s
+const HINT_EASE = 7 // 1/s, ease in/out of the lift
 const FIT_FILL = 1.15 // fraction of the viewport the board may use (headroom for tilt + lift)
 
 export interface BoardCallbacks {
@@ -84,12 +89,16 @@ export interface BoardCallbacks {
   /** A tile started its removal animation. */
   onLeave?: (x: number, y: number) => void
   onHover?: (id: number | null) => void
+  /** All tiles are on the table: intro finished, skipped, or not played (reduced motion). Once per deal. */
+  onReady?: () => void
 }
 
 export interface BoardState {
   tiles: Tile[]
   freeIds: Set<number>
   selectedId: number | null
+  /** Pair highlighted by Help: those tiles float and bob. */
+  hintIds: readonly [number, number] | null
   showFree: boolean
 }
 
@@ -103,6 +112,7 @@ interface TileRt {
   landed: boolean
   leaveStart: number // NaN = not leaving
   hidden: boolean // matrix collapsed (removed)
+  hintAmt: number // 0..1, eased toward 1 while the tile is part of the Help pair
 }
 
 export class BoardRenderer {
@@ -131,9 +141,10 @@ export class BoardRenderer {
   private keyUp0 = new THREE.Vector3()
 
   private rt: TileRt[] = []
-  private state: BoardState = { tiles: [], freeIds: new Set(), selectedId: null, showFree: false }
+  private state: BoardState = { tiles: [], freeIds: new Set(), selectedId: null, hintIds: null, showFree: false }
   private hovered: number | null = null
   private introEnd = 0
+  private readyPending = false
 
   private timer = new THREE.Timer()
   private width = 1
@@ -262,6 +273,7 @@ export class BoardRenderer {
         landed: !animate,
         leaveStart: NaN,
         hidden: false,
+        hintAmt: 0,
       })
     }
     this.aCell.needsUpdate = true
@@ -271,6 +283,7 @@ export class BoardRenderer {
     this.debris.clear()
     for (const m of this.meshes) m.count = tiles.length
     this.introEnd = animate ? now + 0.05 + order.length * STAGGER + DROP : 0
+    this.readyPending = true
     this.fitCamera()
     this.sync({ ...this.state, tiles })
     this.dirty = true
@@ -519,10 +532,14 @@ export class BoardRenderer {
       this.setHovered(this.pointerNdc ? this.pick(this.pointerNdc) : null)
     }
 
-    const animating = this.updateMatrices(now)
+    const animating = this.updateMatrices(now, dt)
     const selFxActive = this.selFx.update(dt, now, this.selTarget)
     this.updateCamLocal()
     const debrisActive = this.debris.update(dt, now, this.camLocal)
+    if (this.readyPending && !this.introRunning) {
+      this.readyPending = false
+      this.cb.onReady?.()
+    }
     const swaying = this.palm !== null && !this.reducedMotion
     if (swaying) this.swayPalm(now)
     if (this.dirty || animating || tilting || swaying || selFxActive || debrisActive) {
@@ -532,9 +549,11 @@ export class BoardRenderer {
   }
 
   /** Recompose instance matrices. Returns true while anything is in motion. */
-  private updateMatrices(now: number): boolean {
+  private updateMatrices(now: number, dt: number): boolean {
     let animating = false
     const sel = this.state.selectedId
+    const hint = this.state.hintIds
+    const hintEase = this.reducedMotion ? 1 : 1 - Math.exp(-dt * HINT_EASE)
     this.selTarget = null
     for (const r of this.rt) {
       const id = r.tile.id
@@ -590,6 +609,19 @@ export class BoardRenderer {
         y += 0.04 * t // the crumbling tile lifts a hair as it breaks
       } else if (id === sel && r.present && !this.reducedMotion) {
         y += 0.1 + 0.03 * Math.sin(now * 5.5) // lifted + gentle bob
+        animating = true
+      }
+
+      // Help: ease the lift in/out; the two tiles bob out of phase
+      const hintIdx = hint ? hint.indexOf(id) : -1
+      const hintTarget = hintIdx >= 0 && r.present && Number.isNaN(r.leaveStart) ? 1 : 0
+      r.hintAmt += (hintTarget - r.hintAmt) * hintEase
+      if (Math.abs(hintTarget - r.hintAmt) < 1e-3) r.hintAmt = hintTarget
+      if (r.hintAmt > 0) {
+        const phase = hintIdx === 1 ? 2.1 : 0
+        const bob = this.reducedMotion ? 0 : HINT_BOB * Math.sin(now * HINT_SPEED + phase)
+        y += r.hintAmt * (HINT_LIFT + bob)
+        if (!this.reducedMotion) rz += r.hintAmt * 0.05 * Math.sin(now * HINT_SPEED * 0.7 + phase)
         animating = true
       }
 

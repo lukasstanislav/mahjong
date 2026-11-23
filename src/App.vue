@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, ref } from 'vue'
+import { defineAsyncComponent, onBeforeUnmount, ref } from 'vue'
 import GameBoard from './components/GameBoard.vue'
 // three.js is ~175 kB gz: load it in its own chunk while the player types their name
 const GameBoard3D = defineAsyncComponent(() => import('./components/GameBoard3D.vue'))
@@ -33,7 +33,7 @@ const player = ref<string | null>(null)
 const showFree = ref(false)
 const sound = ref(readSound())
 setMuted(!sound.value)
-const { tiles, dealId, selectedId, freeIds, availablePairs, won, stuck, newGame, pick } = useGame()
+const { tiles, dealId, selectedId, hintIds, freeIds, availablePairs, won, stuck, newGame, pick, hint } = useGame()
 
 function readSound(): boolean {
   try {
@@ -52,8 +52,47 @@ function toggleSound() {
   }
 }
 
+// ---- auto Help -------------------------------------------------------------
+// Help engages by itself AUTO_HELP_START_MS after the tiles are laid, and after
+// AUTO_HELP_IDLE_MS without a click. It never replaces a hint that is showing.
+const AUTO_HELP_START_MS = 5_000
+const AUTO_HELP_IDLE_MS = 15_000
+let autoHelpTimer: number | undefined
+let boardReady = false
+
+function armAutoHelp(ms: number) {
+  window.clearTimeout(autoHelpTimer)
+  autoHelpTimer = window.setTimeout(autoHelp, ms)
+}
+
+function autoHelp() {
+  if (player.value === null || !boardReady || won.value || stuck.value || hintIds.value) return
+  hint()
+}
+
+/** Board finished laying the tiles (intro done or skipped). */
+function onBoardReady() {
+  boardReady = true
+  armAutoHelp(AUTO_HELP_START_MS)
+}
+
+/** Any click in the game counts as activity. */
+function onActivity() {
+  if (boardReady) armAutoHelp(AUTO_HELP_IDLE_MS)
+}
+
+onBeforeUnmount(() => window.clearTimeout(autoHelpTimer))
+
+function leaveGame() {
+  boardReady = false
+  window.clearTimeout(autoHelpTimer)
+  player.value = null
+}
+
 function deal() {
   unlockAudio() // must run inside a user gesture
+  boardReady = false
+  window.clearTimeout(autoHelpTimer)
   newGame()
 }
 
@@ -73,19 +112,20 @@ function start(name: string) {
     <NameForm :initial="loadName()" @submit="start" />
   </main>
 
-  <main v-else class="game">
+  <main v-else class="game" @pointerdown.capture="onActivity">
     <header class="hud">
       <span class="player">{{ player }}</span>
       <span>Tiles: {{ tiles.length }}</span>
       <span>Moves available: {{ availablePairs }}</span>
       <label class="toggle"><input v-model="showFree" type="checkbox" /> Show pickable</label>
       <label class="toggle"><input v-model="sound" type="checkbox" @change="toggleSound" /> Sound</label>
+      <button :disabled="stuck || won" title="Highlight a possible match" @click="hint">Help</button>
       <button @click="deal">New game</button>
-      <button class="ghost" @click="player = null">Change name</button>
+      <button class="ghost" @click="leaveGame">Change name</button>
     </header>
 
     <section class="table">
-      <component :is="webgl ? GameBoard3D : GameBoard" :tiles="tiles" :deal-id="dealId" :free-ids="freeIds" :selected-id="selectedId" :show-free="showFree" @pick="pick" />
+      <component :is="webgl ? GameBoard3D : GameBoard" :tiles="tiles" :deal-id="dealId" :free-ids="freeIds" :selected-id="selectedId" :hint-ids="hintIds" :show-free="showFree" @pick="pick" @ready="onBoardReady" />
       <div v-if="won || stuck" class="banner">
         <p v-if="won">Well done, {{ player }}! The table is clear.</p>
         <p v-else>No more moves.</p>
@@ -119,6 +159,7 @@ button {
   font-weight: 600;
   cursor: pointer;
 }
+button:disabled { opacity: 0.45; cursor: default; }
 button.ghost { background: transparent; color: inherit; border: 1px solid rgba(255, 255, 255, 0.35); }
 .table { position: relative; flex: 1; min-height: 0; padding: 16px; }
 .banner {

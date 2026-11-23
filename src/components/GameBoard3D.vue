@@ -7,7 +7,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Tile } from '../game/deal'
 import { ParticleLayer } from '../fx/particles'
-import { playChime, playClack, playCrumble, playHonk, playPick } from '../fx/sound'
+import { playClack, playHonk, playMatch, playPick } from '../fx/sound'
 import { BoardRenderer } from '../three/BoardRenderer'
 
 const props = defineProps<{
@@ -15,9 +15,10 @@ const props = defineProps<{
   dealId: number
   freeIds: Set<number>
   selectedId: number | null
+  hintIds: readonly [number, number] | null
   showFree: boolean
 }>()
-const emit = defineEmits<{ pick: [id: number] }>()
+const emit = defineEmits<{ pick: [id: number]; ready: [] }>()
 
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 
@@ -29,12 +30,12 @@ const hoverFree = ref(false)
 let board: BoardRenderer | null = null
 let particles: ParticleLayer | null = null
 let ro: ResizeObserver | null = null
-let lastChime = 0
 
 const state = () => ({
   tiles: props.tiles,
   freeIds: props.freeIds,
   selectedId: props.selectedId,
+  hintIds: props.hintIds,
   showFree: props.showFree,
 })
 
@@ -48,13 +49,9 @@ onMounted(() => {
         if (!reducedMotion) particles?.dust(x, y, w)
       },
       // matched tile: the renderer dissolves it into 3D crumbs; we add the sound
-      onLeave: (x) => {
-        playCrumble(panAt(x))
-        const now = performance.now()
-        if (now - lastChime > 80) playChime()
-        lastChime = now
-      },
+      onLeave: (x) => playMatch(panAt(x)), // called per tile; playMatch plays once per pair
       onHover: (id) => (hoverFree.value = id !== null && props.freeIds.has(id)),
+      onReady: () => emit('ready'),
     },
     reducedMotion,
   )
@@ -80,7 +77,7 @@ watch(() => props.dealId, () => {
   board?.deal(props.tiles)
   board?.sync(state())
 })
-watch(() => [props.tiles, props.freeIds, props.selectedId, props.showFree], () => board?.sync(state()))
+watch(() => [props.tiles, props.freeIds, props.selectedId, props.hintIds, props.showFree], () => board?.sync(state()))
 
 /** Stereo pan (-1..1) from a canvas x coordinate in CSS px. */
 function panAt(x: number) {

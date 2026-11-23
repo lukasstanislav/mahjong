@@ -2,6 +2,7 @@ import { computed, ref, shallowRef } from 'vue'
 import { dealSolvable, type Tile } from './deal'
 import { isFree, turtleLayout } from './layout'
 import { canMatch, matchKey } from './tiles'
+import { findPairs, randomHint, type Pair } from './hint'
 
 /** Game state + rules. Pure UI components consume this; it has no DOM access. */
 export function useGame() {
@@ -11,12 +12,20 @@ export function useGame() {
   const moves = ref(0)
   /** Increments on every deal; the board keys animations on it. */
   const dealId = ref(0)
+  /** Pair currently shown by Help, or null. Cleared by any match and by a new deal. */
+  const hintIds = shallowRef<Pair | null>(null)
 
   function newGame() {
     tiles.value = dealSolvable(layout).tiles
     dealId.value++
     selectedId.value = null
     moves.value = 0
+    hintIds.value = null
+  }
+
+  /** Show a random available matching pair (a different one on each press, when possible). */
+  function hint() {
+    hintIds.value = randomHint(findPairs(tiles.value, freeIds.value), hintIds.value)
   }
 
   const freeIds = computed(() => {
@@ -58,10 +67,11 @@ export function useGame() {
       tiles.value = tiles.value.filter((t) => t.id !== a.id && t.id !== b.id)
       selectedId.value = null
       moves.value++
+      hintIds.value = null
     } else {
       selectedId.value = id
     }
   }
 
-  return { tiles, dealId, selectedId, freeIds, availablePairs, moves, won, stuck, newGame, pick }
+  return { tiles, dealId, selectedId, hintIds, freeIds, availablePairs, moves, won, stuck, newGame, pick, hint }
 }

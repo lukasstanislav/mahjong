@@ -29,6 +29,9 @@ const CLACK_SECONDS = 0.22
 
 const CLACK_FILES = ['sounds/clack-1.mp3', 'sounds/clack-2.mp3']
 const PICK_FILE = 'sounds/tap.mp3'
+/** Reward sound for a matched pair (shatter + sparkle). One is chosen at random per match. */
+const MATCH_FILES = ['sounds/crumble-1.mp3', 'sounds/crumble-2.mp3']
+const MATCH_DEDUPE_S = 0.15 // both tiles of a pair report a removal; play once
 const SAMPLE_LEVEL = 0.6 // after peak normalisation
 
 interface Variation {
@@ -38,7 +41,9 @@ interface Variation {
   level: [number, number]
 }
 const CRUMBLE_GRAINS = 16
-const SHAPE: Record<Surface | 'pick' | 'crumb', Variation> = {
+const SHAPE: Record<Surface | 'pick' | 'crumb' | 'match', Variation> = {
+  // files are ~1.6 s of sound after the (auto-trimmed) onset, padded to 3 s; keep pitch variation small, it's tonal
+  match: { slice: 1.75, rate: [0.97, 1.03], lowpass: [15000, 19000], level: [0.85, 1] },
   felt: { slice: 0.12, rate: [0.84, 0.95], lowpass: [1800, 3400], level: [0.7, 0.95] }, // on cloth
   tile: { slice: 0.18, rate: [0.94, 1.08], lowpass: [5000, 12000], level: [0.7, 1] }, // on a tile
   crumb: { slice: 0.035, rate: [1.6, 2.6], lowpass: [6000, 14000], level: [0.7, 1] }, // tiny grains
@@ -58,11 +63,14 @@ const fetchBytes = (path: string): Promise<ArrayBuffer | null> =>
     : fetch(`${import.meta.env.BASE_URL}${path}`).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null)
 const clackBytes = CLACK_FILES.map(fetchBytes)
 const pickBytes = fetchBytes(PICK_FILE)
+const matchBytes = MATCH_FILES.map(fetchBytes)
 
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
 let clackSamples: Sample[] = []
 let pickSample: Sample | null = null
+let matchSamples: Sample[] = []
+let lastMatchAt = -Infinity
 let synthClacks: Record<Surface, AudioBuffer[]> | null = null
 let muted = false
 
@@ -107,6 +115,9 @@ export function unlockAudio() {
         clackSamples = list.filter((x): x is Sample => x !== null)
       })
       void prepare(ac, pickBytes).then((x) => (pickSample = x))
+      void Promise.all(matchBytes.map((b) => prepare(ac, b))).then((list) => {
+        matchSamples = list.filter((x): x is Sample => x !== null)
+      })
       void renderClackSamples(ac.sampleRate).then((s) => {
         const toBuffers = (arr: Float32Array[]) =>
           arr.map((data) => {
@@ -150,6 +161,24 @@ export function playClack(surface: Surface, gain = 1, pan = 0) {
  * Acrylic crumbling for a matched tile: a burst of tiny, high-pitched, very
  * short grains of the clack samples, front-loaded (crack, then trickle).
  */
+/**
+ * A pair was matched: one of the recorded reward sounds, at random, slightly
+ * varied. Safe to call once per removed tile (deduped per pair). Falls back
+ * to the synthesised crumble + chime if the files didn't load.
+ */
+export function playMatch(pan = 0) {
+  if (!ctx || !master || muted) return
+  if (ctx.currentTime - lastMatchAt < MATCH_DEDUPE_S) return
+  lastMatchAt = ctx.currentTime
+  if (matchSamples.length) {
+    const s = matchSamples[Math.floor(Math.random() * matchSamples.length)]
+    playVaried(s, SHAPE.match, 1, pan * 0.6)
+  } else {
+    playCrumble(pan)
+    playChime()
+  }
+}
+
 export function playCrumble(pan = 0) {
   if (!ctx || !master || muted || !clackSamples.length) return
   for (let i = 0; i < CRUMBLE_GRAINS; i++) {
@@ -181,7 +210,7 @@ function playVaried(s: Sample, v: Variation, gain: number, pan: number, delay = 
   const g = c.createGain()
   const level = gain * s.norm * SAMPLE_LEVEL * rand(v.level[0], v.level[1])
   g.gain.setValueAtTime(level, t)
-  g.gain.setValueAtTime(level, t + v.slice - 0.04)
+  g.gain.setValueAtTime(level, t + v.slice - Math.min(0.25, v.slice * 0.3)) // longer slices get a longer fade
   g.gain.linearRampToValueAtTime(0, t + v.slice)
 
   const p = c.createStereoPanner()
