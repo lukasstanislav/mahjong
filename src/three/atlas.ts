@@ -39,9 +39,9 @@ const SPRITE_IDS = [
   ...Array.from({ length: 9 }, (_, i) => `s${i + 1}`), // bamboo 18–26
   'tan', 'nan', 'xia', 'pei', // winds 27–30
   'chun', 'hatsu', 'haku', // dragons 31–33
+  'plum', 'orchid', 'chrysanthemum', 'bamboo', // flowers 34–37
+  'spring', 'summer', 'autumn', 'winter', // seasons 38–41
 ]
-const FLOWERS = ['梅', '蘭', '菊', '竹'] // 34–37
-const SEASONS = ['春', '夏', '秋', '冬'] // 38–41
 
 export function cellIndex(f: Face): number {
   const r = f.rank - 1
@@ -137,20 +137,6 @@ export function createAtlas(faceSet: FaceSetId): FaceAtlas {
       .catch((e) => console.warn('Tile atlas: face set failed to render', e))
     return finish()
   }
-
-  // Flowers & seasons
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ;[...FLOWERS, ...SEASONS].forEach((glyph, k) => {
-    const [x, y] = cellXY(34 + k)
-    const flower = k < 4
-    ctx.fillStyle = flower ? '#b0306a' : '#1f5fa8'
-    ctx.font = `bold ${Math.round(CH * 0.4)}px "Songti SC", "Noto Serif SC", "Noto Serif CJK SC", SimSun, serif`
-    ctx.fillText(glyph, x + CW / 2, y + CH * 0.47)
-    ctx.fillStyle = '#1d2a4a'
-    ctx.font = `bold ${Math.round(CH * 0.1)}px serif`
-    ctx.fillText(String((k % 4) + 1), x + CW * 0.8, y + CH * 0.87)
-  })
 
   void (async () => {
     try {
