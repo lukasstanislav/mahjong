@@ -100,11 +100,22 @@ const HINT_BOB = 0.09 // bob amplitude
 const HINT_SPEED = 3.2 // rad/s
 const HINT_EASE = 7 // 1/s, ease in/out of the lift
 const FIT_FILL = 1.15 // fraction of the viewport the board may use (headroom for tilt + lift)
+// zoom-in as the board shrinks: the camera frames only the remaining tiles
+const MAX_ZOOM = 1.8 // never closer than full-board distance / MAX_ZOOM (caps the zoom for the last pieces)
+const VIEW_RATE = 2.2 // 1/s, exponential easing toward the new framing
 // victory: fireworks start this long after the last pair finished dissolving
 const CELEBRATE_DELAY = 0.25
 const CLICK_BURST_Y = 4.4 // height of a shell launched by clicking the empty table
 const DUSK_SUN = 0.22 // key light multiplier at full dusk (fireworks glow on a dark cloth)
 const DUSK_AMBIENT = 0.35 // hemisphere multiplier at full dusk
+
+interface View {
+  dist: number
+  tx: number
+  tz: number
+  ox: number
+  oy: number
+}
 
 export interface BoardCallbacks {
   /** Tile hit the surface (intro). Screen coords in CSS px of the canvas. */
@@ -197,10 +208,15 @@ export class BoardRenderer {
   private timer = new THREE.Timer()
   private width = 1
   private height = 1
-  private camDist = 30
+  /** Camera framing: distance, look-at point (table-local x/z) and lens shift (NDC). */
+  private view: View = { dist: 30, tx: 0, tz: 0, ox: 0, oy: 0 }
+  private viewTarget: View = { ...this.view }
+  private viewAt = 0 // timer time when easing toward viewTarget may start
+  private fullDist = 30 // distance that frames the whole dealt layout
   private center = new THREE.Vector3()
   private tilt = new THREE.Vector2() // smoothed, -1..1
   private tiltTarget = new THREE.Vector2()
+  private parallax = true // user setting; reduced motion disables tilt regardless
   private pointerNdc: THREE.Vector2 | null = null
   private pointerDirty = false
   private dirty = true
@@ -348,7 +364,7 @@ export class BoardRenderer {
     for (const m of this.meshes) m.count = tiles.length
     this.introEnd = animate ? now + 0.05 + order.length * STAGGER + DROP : 0
     this.readyPending = true
-    this.fitCamera()
+    this.fitCamera(true)
     this.sync({ ...this.state, tiles })
     this.dirty = true
   }
@@ -374,6 +390,11 @@ export class BoardRenderer {
     let crashAt = 0
     for (const [a, b] of pairUp(leaving)) crashAt = Math.max(crashAt, this.launchPair(a, b, now, final))
     if (final && !this.reducedMotion) this.fireworks.start(now + crashAt + LEAVE + CELEBRATE_DELAY, this.boardBounds())
+    // reframe on what's left once the pair is gone; on victory, back out to the full board for the show
+    if (removed) {
+      this.viewTarget = final ? this.computeView(this.rt, false) : this.computeView(this.rt.filter((r) => r.present), true)
+      this.viewAt = now + (this.reducedMotion ? 0 : crashAt + LEAVE)
+    }
     if (this.hovered !== null && !present.has(this.hovered)) this.setHovered(null)
     this.writeStates()
     this.dirty = true
@@ -519,14 +540,26 @@ export class BoardRenderer {
   /** Pointer in NDC (-1..1, y up), or null when it leaves the canvas. */
   pointer(ndc: { x: number; y: number } | null) {
     this.pointerNdc = ndc ? new THREE.Vector2(ndc.x, ndc.y) : null
-    this.tiltTarget.set(ndc && !this.reducedMotion ? ndc.x : 0, ndc && !this.reducedMotion ? ndc.y : 0)
+    const on = ndc && this.parallax && !this.reducedMotion
+    this.tiltTarget.set(on ? ndc.x : 0, on ? ndc.y : 0)
     this.pointerDirty = true
+  }
+
+  /** Parallax tilt on/off. Turning it off eases the table back to flat. */
+  setParallax(on: boolean) {
+    this.parallax = on
+    if (!on) this.tiltTarget.set(0, 0)
+    else if (this.pointerNdc && !this.reducedMotion) this.tiltTarget.copy(this.pointerNdc)
   }
 
   /** Topmost present tile under the NDC point. */
   pick(ndc: { x: number; y: number }): number | null {
     this.table.updateMatrixWorld()
     this.raycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.camera)
+    // InstancedMesh caches its bounding sphere on the first raycast and never
+    // refreshes it. Instances move (intro drop, flights, new deals/layouts), so a
+    // stale sphere silently rejects rays over part of the board. 144 instances: cheap.
+    this.pickMesh.computeBoundingSphere()
     for (const hit of this.raycaster.intersectObject(this.pickMesh)) {
       const id = hit.instanceId
       if (id !== undefined && this.rt[id]?.present) return id
@@ -539,7 +572,7 @@ export class BoardRenderer {
     this.height = Math.max(1, h)
     this.renderer.setSize(this.width, this.height, false)
     this.camera.aspect = this.width / this.height
-    this.fitCamera()
+    this.fitCamera(true)
     this.dirty = true
   }
 
@@ -723,7 +756,8 @@ export class BoardRenderer {
       this.setHovered(this.pointerNdc ? this.pick(this.pointerNdc) : null)
     }
 
-    const animating = this.updateMatrices(now, dt)
+    const reframing = this.easeView(now, dt)
+    const animating = this.updateMatrices(now, dt) || reframing
     const selFxActive = this.selFx.update(dt, now, this.selTarget)
     this.updateCamLocal()
     const debrisActive = this.debris.update(dt, now, this.camLocal)
@@ -942,45 +976,90 @@ export class BoardRenderer {
   }
 
   private placeCamera() {
+    this.poseCamera(this.view, this.tilt)
+  }
+
+  /** Position the camera for a framing and tilt, including the lens shift. */
+  private poseCamera(v: View, tilt: THREE.Vector2) {
     const c = this.camera
     c.position.set(
-      this.tilt.x * CAM_ORBIT,
-      Math.sin(CAM_ELEVATION) * this.camDist + this.tilt.y * CAM_ORBIT,
-      Math.cos(CAM_ELEVATION) * this.camDist,
+      v.tx + tilt.x * CAM_ORBIT,
+      Math.sin(CAM_ELEVATION) * v.dist + tilt.y * CAM_ORBIT,
+      v.tz + Math.cos(CAM_ELEVATION) * v.dist,
     )
-    c.lookAt(0, TH, 0)
+    c.lookAt(v.tx, TH, v.tz)
+    c.setViewOffset(
+      this.width,
+      this.height,
+      (v.ox * this.width) / 2,
+      (-v.oy * this.height) / 2 + VIEW_SHIFT_Y * this.height,
+      this.width,
+      this.height,
+    )
     c.updateProjectionMatrix()
     c.updateMatrixWorld()
   }
 
   /**
-   * Fit the board to the viewport: choose camera distance from the projected
-   * extents, then centre them with a lens shift (setViewOffset), which moves
-   * the image without changing perspective. Raycasting/project() include it.
+   * Frame the board (all tiles: full layout; `snap`: jump there, as on a deal or
+   * resize) and refresh the zoom limit. Remaining tiles are reframed in sync().
    */
-  private fitCamera() {
-    this.camera.clearViewOffset()
+  private fitCamera(snap: boolean) {
     if (this.rt.length === 0) return this.placeCamera()
+    const full = this.computeView(this.rt, false)
+    this.fullDist = full.dist
+    const present = this.rt.filter((r) => r.present)
+    this.viewTarget = present.length && present.length < this.rt.length ? this.computeView(present, true) : full
+    if (snap) this.view = { ...this.viewTarget }
+    this.placeCamera()
+  }
+
+  /** Ease the framing toward viewTarget. Returns true while it moves. */
+  private easeView(now: number, dt: number): boolean {
+    if (now < this.viewAt) return false
+    const v = this.view
+    const t = this.viewTarget
+    const k = this.reducedMotion ? 1 : 1 - Math.exp(-dt * VIEW_RATE)
+    const d = Math.abs(t.dist - v.dist) / v.dist + Math.abs(t.tx - v.tx) + Math.abs(t.tz - v.tz) + Math.abs(t.ox - v.ox) + Math.abs(t.oy - v.oy)
+    if (d < 1e-4) return false
+    for (const key of ['dist', 'tx', 'tz', 'ox', 'oy'] as const) v[key] += (t[key] - v[key]) * k
+    this.placeCamera()
+    this.pointerDirty = true // tiles slid under a still cursor: refresh hover
+    return true
+  }
+
+  /**
+   * Framing for a set of tiles: aim at their centre, choose the distance from
+   * their projected extents, then centre them with a lens shift (setViewOffset),
+   * which moves the image without changing perspective. Raycasting/project()
+   * include it. `limit`: no closer than fullDist / MAX_ZOOM.
+   */
+  private computeView(tiles: TileRt[], limit: boolean): View {
     // Fit the real tiles (8 corners each, padded for spin and the selection lift),
     // not their bounding box: a box's top spans the whole area at the tallest
     // stack's height, which over-frames tall layouts and crops flat ones.
     const px = TW / 2 + 0.1
     const pz = TD / 2 + 0.1
     const corners: THREE.Vector3[] = []
-    for (const r of this.rt) {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
+    for (const r of tiles) {
+      minX = Math.min(minX, r.base.x)
+      maxX = Math.max(maxX, r.base.x)
+      minZ = Math.min(minZ, r.base.z)
+      maxZ = Math.max(maxZ, r.base.z)
       for (const dx of [-px, px])
         for (const dz of [-pz, pz])
           for (const y of [r.base.y, r.base.y + TH + 0.15]) corners.push(new THREE.Vector3(r.base.x + dx, y, r.base.z + dz))
     }
     // FIT_FILL and VIEW_SHIFT_Y are upper bounds: zoom + shift may never push tiles off-screen
     const fill = Math.min(FIT_FILL, 0.98 - 2 * Math.abs(VIEW_SHIFT_Y))
-
-    const savedTilt = this.tilt.clone()
-    this.tilt.set(0, 0)
+    const v: View = { dist: this.view.dist, tx: (minX + maxX) / 2, tz: (minZ + maxZ) / 2, ox: 0, oy: 0 }
+    const noTilt = new THREE.Vector2()
     const lo = new THREE.Vector2()
     const hi = new THREE.Vector2()
-    for (let i = 0; i < 6; i++) {
-      this.placeCamera()
+    const measure = () => {
+      this.poseCamera({ ...v, ox: 0, oy: 0 }, noTilt)
+      this.camera.clearViewOffset()
       lo.set(Infinity, Infinity)
       hi.set(-Infinity, -Infinity)
       for (const p of corners) {
@@ -988,22 +1067,18 @@ export class BoardRenderer {
         lo.min(this.tmpV2.set(n.x, n.y))
         hi.max(this.tmpV2)
       }
-      const halfRange = Math.max(hi.x - lo.x, hi.y - lo.y) / 2
-      this.camDist *= halfRange / fill
     }
+    for (let i = 0; i < 6; i++) {
+      measure()
+      v.dist *= Math.max(hi.x - lo.x, hi.y - lo.y) / 2 / fill
+    }
+    if (limit) v.dist = Math.max(v.dist, this.fullDist / MAX_ZOOM)
+    measure()
     // shift the frustum so the projected box is centred
-    const cx = (lo.x + hi.x) / 2
-    const cy = (lo.y + hi.y) / 2
-    this.camera.setViewOffset(
-      this.width,
-      this.height,
-      (cx * this.width) / 2,
-      (-cy * this.height) / 2 + VIEW_SHIFT_Y * this.height,
-      this.width,
-      this.height,
-    )
-    this.tilt.copy(savedTilt)
-    this.placeCamera()
+    v.ox = (lo.x + hi.x) / 2
+    v.oy = (lo.y + hi.y) / 2
+    this.placeCamera() // restore the live pose
+    return v
   }
 
   // ---- projections -------------------------------------------------------------

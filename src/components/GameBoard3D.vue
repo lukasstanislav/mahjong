@@ -19,6 +19,7 @@ const props = defineProps<{
   hintIds: readonly [number, number] | null
   showFree: boolean
   faceSet: FaceSetId
+  parallax: boolean
 }>()
 const emit = defineEmits<{ pick: [id: number]; ready: [] }>()
 
@@ -61,6 +62,7 @@ onMounted(() => {
     144,
     props.faceSet,
   )
+  board.setParallax(props.parallax)
   ro = new ResizeObserver(([e]) => {
     const { width, height } = e.contentRect
     board?.resize(width, height)
@@ -87,6 +89,7 @@ watch(() => props.dealId, () => {
   board?.sync(state())
 })
 watch(() => props.faceSet, (id) => board?.setFaceSet(id))
+watch(() => props.parallax, (on) => board?.setParallax(on))
 watch(() => [props.tiles, props.freeIds, props.selectedId, props.hintIds, props.showFree], () => board?.sync(state()))
 
 /** Stereo pan (-1..1) from a canvas x coordinate in CSS px. */

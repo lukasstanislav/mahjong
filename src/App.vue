@@ -13,6 +13,7 @@ import { setAmbienceEnabled, startAmbience } from './fx/ambience'
 const STORAGE_KEY = 'mahjong.playerName'
 const SOUND_KEY = 'mahjong.sound'
 const AMBIENCE_KEY = 'mahjong.ambience'
+const PARALLAX_KEY = 'mahjong.parallax'
 const LAYOUT_KEY = 'mahjong.layout'
 const FACES_KEY = 'mahjong.faces'
 
@@ -146,6 +147,16 @@ function toggleAmbience() {
   }
 }
 
+const parallax = ref(readFlag(PARALLAX_KEY))
+
+function toggleParallax() {
+  try {
+    localStorage.setItem(PARALLAX_KEY, parallax.value ? 'on' : 'off')
+  } catch {
+    /* ignore */
+  }
+}
+
 // layout choice: remembered, and picking one starts a new game
 layoutId.value = (() => {
   try {
@@ -242,13 +253,14 @@ function start(name: string) {
       <label class="toggle"><input v-model="showFree" type="checkbox" /> Show pickable</label>
       <label class="toggle"><input v-model="sound" type="checkbox" @change="toggleSound" /> Sound</label>
       <label class="toggle"><input v-model="ambience" type="checkbox" @change="toggleAmbience" /> Ambience</label>
+      <label v-if="webgl" class="toggle"><input v-model="parallax" type="checkbox" @change="toggleParallax" /> Parallax</label>
       <button :disabled="stuck || won" title="Highlight a possible match" @click="hint">Help</button>
       <button @click="deal">New game</button>
       <button class="ghost" @click="leaveGame">Change name</button>
     </header>
 
     <section class="table">
-      <component :is="webgl ? GameBoard3D : GameBoard" :tiles="tiles" :deal-id="dealId" :free-ids="freeIds" :selected-id="selectedId" :hint-ids="hintIds" :show-free="showFree" :face-set="faceSet" @pick="pick" @ready="onBoardReady" />
+      <component :is="webgl ? GameBoard3D : GameBoard" :tiles="tiles" :deal-id="dealId" :free-ids="freeIds" :selected-id="selectedId" :hint-ids="hintIds" :show-free="showFree" :face-set="faceSet" :parallax="parallax" @pick="pick" @ready="onBoardReady" />
       <div v-if="won" class="victory" :style="{ '--delay': `${VICTORY_MS}ms` }">
         <p class="kicker">The table is clear</p>
         <h1 class="title">Well done!</h1>
