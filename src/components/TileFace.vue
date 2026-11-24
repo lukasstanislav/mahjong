@@ -20,7 +20,7 @@ const generated = computed(() => (props.faceSet === 'classic' ? null : faceDataU
 
 const SPRITE = `${import.meta.env.BASE_URL}tiles.svg`
 const WINDS = ['tan', 'nan', 'xia', 'pei'] // E S W N
-const DRAGONS = ['chun', 'hatsu', 'haku'] // red, green, white (blank)
+const DRAGONS = ['chun', 'hatsu', 'haku'] // red, green, white (framed)
 const FLOWERS = ['梅', '蘭', '菊', '竹']
 const SEASONS = ['春', '夏', '秋', '冬']
 
